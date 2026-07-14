@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS public.raw_material_lots (
   deleted_reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT raw_material_lots_internal_lot_no_not_empty CHECK (TRIM(internal_lot_no) <> ''),
   CONSTRAINT raw_material_lots_kunye_number_not_empty CHECK (TRIM(kunye_number) <> ''),
   CONSTRAINT raw_material_lots_kunye_status_check CHECK (kunye_status IN ('provided', 'internal_placeholder')),
   CONSTRAINT raw_material_lots_qty_received_positive CHECK (quantity_received > 0),
@@ -101,7 +102,8 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies 
-    WHERE tablename = 'suppliers' 
+    WHERE schemaname = 'public'
+      AND tablename = 'suppliers' 
       AND policyname = 'select_suppliers_by_tenant'
   ) THEN
     CREATE POLICY select_suppliers_by_tenant ON public.suppliers
@@ -115,7 +117,8 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies 
-    WHERE tablename = 'raw_material_receipts' 
+    WHERE schemaname = 'public'
+      AND tablename = 'raw_material_receipts' 
       AND policyname = 'select_raw_material_receipts_by_tenant'
   ) THEN
     CREATE POLICY select_raw_material_receipts_by_tenant ON public.raw_material_receipts
@@ -129,7 +132,8 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies 
-    WHERE tablename = 'raw_material_lots' 
+    WHERE schemaname = 'public'
+      AND tablename = 'raw_material_lots' 
       AND policyname = 'select_raw_material_lots_by_tenant'
   ) THEN
     CREATE POLICY select_raw_material_lots_by_tenant ON public.raw_material_lots
