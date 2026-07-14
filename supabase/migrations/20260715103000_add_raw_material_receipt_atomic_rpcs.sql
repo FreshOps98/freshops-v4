@@ -20,6 +20,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'raw_material_receipts_idempotency_key_check'
+      AND conrelid = 'public.raw_material_receipts'::regclass
   ) THEN
     ALTER TABLE public.raw_material_receipts 
       ADD CONSTRAINT raw_material_receipts_idempotency_key_check 
@@ -160,6 +161,8 @@ DECLARE
   v_sm_previous_stock NUMERIC;
   v_sm_new_stock NUMERIC;
   v_sm_total_cost NUMERIC;
+  
+  v_found_count INT := 0;
 BEGIN
   -- 3.1 Tenant Context Validation
   v_org_id := public.current_organization_id();
@@ -226,6 +229,8 @@ BEGIN
       FROM public.raw_material_lots rml
       JOIN public.stock_movements sm ON rml.inbound_stock_movement_id = sm.id
       WHERE rml.raw_material_receipt_id = v_existing_receipt.id
+        AND rml.organization_id = v_org_id
+        AND sm.organization_id = v_org_id
         AND rml.is_deleted = FALSE
     ) q;
 
@@ -283,44 +288,32 @@ BEGIN
   END IF;
 
   -- 3.5 Extract and lock raw materials deterministically to prevent deadlocks
-  SELECT array_agg(DISTINCT (val->>'raw_material_id')) INTO v_rm_ids
+  SELECT array_agg(DISTINCT BTRIM(val->>'raw_material_id')) INTO v_rm_ids
   FROM jsonb_array_elements(p_lines) AS val
-  WHERE (val->>'raw_material_id') IS NOT NULL;
+  WHERE (val->>'raw_material_id') IS NOT NULL AND BTRIM(val->>'raw_material_id') <> '';
 
   IF v_rm_ids IS NULL OR cardinality(v_rm_ids) = 0 THEN
     RAISE EXCEPTION 'p_lines içindeki raw_material_id değerleri geçerli değildir.';
   END IF;
 
+  v_found_count := 0;
+
   FOR r_rm IN 
     SELECT id, name, unit, is_active, is_deleted, organization_id
     FROM public.raw_materials
     WHERE id = ANY(v_rm_ids)
+      AND organization_id = v_org_id
+      AND is_active = TRUE
+      AND is_deleted = FALSE
     ORDER BY id ASC
     FOR UPDATE
   LOOP
-    IF r_rm.organization_id <> v_org_id THEN
-      RAISE EXCEPTION 'Yetkisiz hammadde erişimi: %', r_rm.id;
-    END IF;
-    IF r_rm.is_active = FALSE OR r_rm.is_deleted = TRUE THEN
-      RAISE EXCEPTION 'Hammadde aktif değil veya silinmiş: % (%)', r_rm.name, r_rm.id;
-    END IF;
+    v_found_count := v_found_count + 1;
   END LOOP;
 
-  -- Ensure all distinct IDs are verified
-  DECLARE
-    v_found_count INT;
-  BEGIN
-    SELECT count(*) INTO v_found_count
-    FROM public.raw_materials
-    WHERE id = ANY(v_rm_ids)
-      AND organization_id = v_org_id
-      AND is_active = TRUE
-      AND is_deleted = FALSE;
-      
-    IF v_found_count <> cardinality(v_rm_ids) THEN
-      RAISE EXCEPTION 'Girdiğiniz hammaddelerden bazıları bulunamadı, aktif değil veya silinmiş.';
-    END IF;
-  END;
+  IF v_found_count <> cardinality(v_rm_ids) THEN
+    RAISE EXCEPTION 'Hammadde bulunamadı veya erişim yetkisi yok.';
+  END IF;
 
   -- 3.6 Create Receipt Header Record
   v_receipt_id := public.freshops_id('rmr');
@@ -353,15 +346,30 @@ BEGIN
   -- 3.7 Process each purchase line and stock movement
   v_line_idx := 0;
   FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines) LOOP
-    v_rm_id := v_line->>'raw_material_id';
-    v_qty := (v_line->>'quantity')::NUMERIC;
-    v_price := COALESCE((v_line->>'unit_price')::NUMERIC, 0);
+    IF jsonb_typeof(v_line) <> 'object' THEN
+      RAISE EXCEPTION 'Satır %: Geçersiz satır verisi, satır bir JSON objesi olmalıdır.', v_line_idx + 1;
+    END IF;
+
+    -- Validate numeric conversion to prevent unhandled database exceptions during casting
+    BEGIN
+      v_qty := (v_line->>'quantity')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE EXCEPTION 'Satır %: Miktar (quantity) geçerli bir sayı olmalıdır.', v_line_idx + 1;
+    END;
+
+    BEGIN
+      v_price := COALESCE((v_line->>'unit_price')::NUMERIC, 0);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE EXCEPTION 'Satır %: Birim fiyat (unit_price) geçerli bir sayı olmalıdır.', v_line_idx + 1;
+    END;
+
+    v_rm_id := BTRIM(v_line->>'raw_material_id');
     v_kunye_no := BTRIM(v_line->>'kunye_number');
-    v_kunye_stat := v_line->>'kunye_status';
+    v_kunye_stat := BTRIM(v_line->>'kunye_status');
     v_line_note := NULLIF(BTRIM(v_line->>'note'), '');
 
     -- Validation of item parameters
-    IF v_rm_id IS NULL OR BTRIM(v_rm_id) = '' THEN
+    IF v_rm_id IS NULL OR v_rm_id = '' THEN
       RAISE EXCEPTION 'Satır %: raw_material_id boş olamaz.', v_line_idx + 1;
     END IF;
 
@@ -384,7 +392,14 @@ BEGIN
     -- Retrieve verified raw material unit
     SELECT unit INTO v_rm_unit
     FROM public.raw_materials
-    WHERE id = v_rm_id;
+    WHERE id = v_rm_id
+      AND organization_id = v_org_id
+      AND is_active = TRUE
+      AND is_deleted = FALSE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Satır %: Hammadde bulunamadı veya erişim yetkisi yok: %', v_line_idx + 1, v_rm_id;
+    END IF;
 
     -- Generate FreshOps IDs
     v_sm_id := public.freshops_id('sm');
