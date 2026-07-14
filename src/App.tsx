@@ -14,7 +14,11 @@ import {
   FinishedGoodsMovement,
   ProductionPlanStatus,
   ProductionRun,
-  CloseProductionPlanAction
+  CloseProductionPlanAction,
+  Supplier,
+  RawMaterialReceipt,
+  RawMaterialLot,
+  CreateRawMaterialReceiptInput
 } from './types';
 import { formatCurrency } from './utils/format';
 import { getTodayISO, getTomorrowISO, parseISODateSafe } from './utils/dateHelper';
@@ -313,7 +317,10 @@ export default function App() {
       loadTable('finished_goods_stocks', () => supabaseDataService.getFinishedGoods(), (data) => setFinishedGoodsStocks(data.map(normalizeFinishedGoodsStock))),
       loadTable('finished_goods_movements', () => supabaseDataService.getFinishedGoodsMovements(), setFinishedGoodsMovements),
       loadTable('production_runs', () => supabaseDataService.getProductionRuns(), setProductionRuns),
-      loadTable('cost_settings', () => supabaseDataService.getCostSettings(), setCostSettings)
+      loadTable('cost_settings', () => supabaseDataService.getCostSettings(), setCostSettings),
+      loadTable('suppliers', () => supabaseDataService.getSuppliers(), setSuppliers),
+      loadTable('raw_material_receipts', () => supabaseDataService.getRawMaterialReceipts(), setRawMaterialReceipts),
+      loadTable('raw_material_lots', () => supabaseDataService.getRawMaterialLots(), setRawMaterialLots)
     ]);
 
     if (hasError) {
@@ -484,6 +491,10 @@ export default function App() {
     const settings = dataService.getCostSettings();
     return settings ? settings : DEFAULT_COST_SETTINGS;
   });
+
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [rawMaterialReceipts, setRawMaterialReceipts] = useState<RawMaterialReceipt[]>([]);
+  const [rawMaterialLots, setRawMaterialLots] = useState<RawMaterialLot[]>([]);
 
   // Settings form states
   const [settingsLaborCost, setSettingsLaborCost] = useState<string>('');
@@ -1365,6 +1376,157 @@ export default function App() {
     } else {
       // Soft delete stock movement
       setStockMovements(prev => prev.map(m => m.id === id ? { ...m, isDeleted: true } : m));
+    }
+  };
+
+  // --- HANDLERS: PURCHASE / SUPPLIERS / RECEIPTS / LOTS ---
+  const handleCreateOrGetSupplier = async (name: string, note?: string): Promise<{ supplierId: string; name: string; created: boolean }> => {
+    if (USE_SUPABASE) {
+      try {
+        const result = await supabaseDataService.createOrGetSupplierAtomic(name, note);
+        const supList = await supabaseDataService.getSuppliers();
+        setSuppliers(supList);
+        return result;
+      } catch (err: any) {
+        console.error("Error in createOrGetSupplierAtomic:", err);
+        alert(`Tedarikçi işlemi sırasında hata oluştu: ${err.message || err}`);
+        throw err;
+      }
+    } else {
+      const existing = suppliers.find(s => s.name.toLowerCase() === name.trim().toLowerCase());
+      if (existing) {
+        return { supplierId: existing.id, name: existing.name, created: false };
+      }
+      const newId = 'sup_' + Math.random().toString(36).substring(2, 9);
+      const newSup: Supplier = {
+        id: newId,
+        name: name.trim(),
+        note: note,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      setSuppliers([...suppliers, newSup]);
+      return { supplierId: newId, name: newSup.name, created: true };
+    }
+  };
+
+  const handleCreateRawMaterialReceipt = async (input: CreateRawMaterialReceiptInput): Promise<any> => {
+    if (USE_SUPABASE) {
+      try {
+        const result = await supabaseDataService.createRawMaterialReceiptAtomic(input);
+        const [rmList, smList, supList, recList, lotList] = await Promise.all([
+          supabaseDataService.getRawMaterials(),
+          supabaseDataService.getStockMovements(),
+          supabaseDataService.getSuppliers(),
+          supabaseDataService.getRawMaterialReceipts(),
+          supabaseDataService.getRawMaterialLots()
+        ]);
+
+        setRawMaterials(rmList.map(item => ({
+          ...item,
+          averageCost: typeof item.averageCost === 'number' ? item.averageCost : (item.averageCost ?? item.purchasePrice ?? 0)
+        })));
+        setStockMovements(smList);
+        setSuppliers(supList);
+        setRawMaterialReceipts(recList);
+        setRawMaterialLots(lotList);
+
+        return result;
+      } catch (err: any) {
+        console.error("Error in createRawMaterialReceiptAtomic:", err);
+        alert(`Satın alma işlemi sırasında hata oluştu: ${err.message || err}`);
+        throw err;
+      }
+    } else {
+      const receiptId = 'rmr_' + Math.random().toString(36).substring(2, 9);
+      const newReceipt: RawMaterialReceipt = {
+        id: receiptId,
+        supplierId: input.supplierId,
+        receiptDate: input.receiptDate,
+        invoiceNumber: input.invoiceNumber || '',
+        dispatchNoteNumber: input.dispatchNoteNumber || '',
+        note: input.note || '',
+        idempotencyKey: input.idempotencyKey,
+        isDeleted: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      const newLots: RawMaterialLot[] = [];
+      const newMovements: StockMovement[] = [];
+
+      input.lines.forEach((line, index) => {
+        const smId = 'mov_' + Math.random().toString(36).substring(2, 9);
+        const lotId = 'lot_' + Math.random().toString(36).substring(2, 9);
+        const rm = rawMaterials.find(r => r.id === line.raw_material_id);
+        const rmUnit = rm?.unit || 'kg';
+
+        const newMov: StockMovement = {
+          id: smId,
+          rawMaterialId: line.raw_material_id,
+          type: 'Stok Girişi',
+          quantity: line.quantity,
+          unit: rmUnit,
+          date: input.receiptDate,
+          note: `Satın Alma - Fiş: ${receiptId}`,
+          unitPrice: line.unit_price,
+          totalCost: line.quantity * line.unit_price,
+          createdAt: new Date().toISOString()
+        };
+
+        const newLot: RawMaterialLot = {
+          id: lotId,
+          rawMaterialReceiptId: receiptId,
+          rawMaterialId: line.raw_material_id,
+          inboundStockMovementId: smId,
+          internalLotNo: `LOT-${receiptId.toUpperCase()}-${index + 1}`,
+          kunyeNumber: line.kunye_number || '',
+          kunyeStatus: line.kunye_status || 'provided',
+          quantityReceived: line.quantity,
+          quantityRemaining: line.quantity,
+          unit: rmUnit,
+          unitPrice: line.unit_price,
+          note: line.note || '',
+          isDeleted: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        newMovements.push(newMov);
+        newLots.push(newLot);
+      });
+
+      setRawMaterialReceipts([...rawMaterialReceipts, newReceipt]);
+      setRawMaterialLots([...rawMaterialLots, ...newLots]);
+      setStockMovements([...stockMovements, ...newMovements]);
+
+      setRawMaterials(prev => prev.map(rm => {
+        const itemLines = input.lines.filter(l => l.raw_material_id === rm.id);
+        if (itemLines.length > 0) {
+          const totalQty = itemLines.reduce((sum, l) => sum + l.quantity, 0);
+          const lastLine = itemLines[itemLines.length - 1];
+          const currentStock = calculateCurrentStock(rm.id, stockMovements);
+          const existingAvgCost = rm.averageCost ?? calculateWeightedAverageCost(rm.id, stockMovements, rm.purchasePrice);
+          const prevQty = currentStock > 0 ? currentStock : 0;
+          const newQty = totalQty;
+          const newPrice = lastLine.unit_price;
+          let newAvgCost = existingAvgCost;
+          if (prevQty + newQty > 0) {
+            newAvgCost = (prevQty * existingAvgCost + totalQty * newPrice) / (prevQty + newQty);
+          } else {
+            newAvgCost = newPrice;
+          }
+          return {
+            ...rm,
+            purchasePrice: lastLine.unit_price,
+            averageCost: newAvgCost
+          };
+        }
+        return rm;
+      }));
+
+      return { success: true, alreadyCreated: false, receiptId };
     }
   };
 
@@ -3179,6 +3341,11 @@ export default function App() {
               onAddMovement={handleAddStockMovement}
               onUpdateMovement={handleUpdateStockMovement}
               onDeleteMovement={handleDeleteStockMovement}
+              suppliers={suppliers}
+              rawMaterialReceipts={rawMaterialReceipts}
+              rawMaterialLots={rawMaterialLots}
+              onCreateOrGetSupplier={handleCreateOrGetSupplier}
+              onCreateRawMaterialReceipt={handleCreateRawMaterialReceipt}
             />
           )}
 

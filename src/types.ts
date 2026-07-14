@@ -307,3 +307,77 @@ export interface CloseProductionPlanAction {
   target_date?: string;  // snake_case backup
 }
 
+// New Raw Material Purchase & Lot Traceability Types
+export type KunyeStatus = 'provided' | 'internal_placeholder';
+
+export interface Supplier {
+  id: string;
+  name: string;
+  note?: string;
+  isActive: boolean;
+  isDeleted?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RawMaterialReceipt {
+  id: string;
+  supplierId: string;
+  receiptDate: string;
+  invoiceNumber?: string;
+  dispatchNoteNumber?: string;
+  note?: string;
+  idempotencyKey?: string;
+  isDeleted?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RawMaterialLot {
+  id: string;
+  rawMaterialReceiptId: string;
+  rawMaterialId: string;
+  inboundStockMovementId: string;
+  internalLotNo: string;
+  kunyeNumber: string;
+  kunyeStatus: KunyeStatus;
+  quantityReceived: number;
+  quantityRemaining: number;
+  unit: string;
+  unitPrice: number;
+  note?: string;
+  isDeleted?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RawMaterialReceiptLineInput {
+  raw_material_id: string;
+  quantity: number;
+  unit_price: number;
+  kunye_number: string;
+  kunye_status: 'provided' | 'internal_placeholder';
+  note?: string | null;
+}
+
+export interface CreateRawMaterialReceiptInput {
+  supplierId: string;
+  receiptDate: string;
+  lines: RawMaterialReceiptLineInput[];
+  idempotencyKey: string;
+  invoiceNumber?: string;
+  dispatchNoteNumber?: string;
+  note?: string;
+}
+
+export interface CreateRawMaterialReceiptResult {
+  receipt_id: string;
+  already_created: boolean;
+}
+
+export interface CreateOrGetSupplierResult {
+  supplier_id: string;
+  already_exists: boolean;
+}
+
+

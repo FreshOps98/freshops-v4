@@ -13,7 +13,11 @@ import {
   WasteRecord,
   CostSettings,
   ProductionRun,
-  CloseProductionPlanAction
+  CloseProductionPlanAction,
+  Supplier,
+  RawMaterialReceipt,
+  RawMaterialLot,
+  CreateRawMaterialReceiptInput
 } from '../types';
 import { generateId } from './localDataService';
 import { supabase } from '../lib/supabaseClient';
@@ -607,6 +611,65 @@ export function costSettingsToDb(item: any) {
     stock_warning_threshold: toNumber(item.stockWarningThreshold, 10),
     lot_date_offset_days: item.lotDateOffsetDays !== undefined ? toNumber(item.lotDateOffsetDays, 0) : 0,
     currency: item.currency || 'TRY'
+  };
+}
+
+export function dbToSupplier(row: any): Supplier {
+  return {
+    id: row.id,
+    name: row.name || '',
+    note: row.note || '',
+    isActive: row.is_active !== false,
+    isDeleted: !!row.is_deleted,
+    createdAt: row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at || new Date().toISOString()
+  };
+}
+
+export function supplierToDb(item: any) {
+  return {
+    id: item.id,
+    name: item.name,
+    note: item.note || null,
+    is_active: item.isActive !== false,
+    is_deleted: !!item.isDeleted,
+    created_at: item.createdAt || new Date().toISOString(),
+    updated_at: item.updatedAt || new Date().toISOString()
+  };
+}
+
+export function dbToRawMaterialReceipt(row: any): RawMaterialReceipt {
+  return {
+    id: row.id,
+    supplierId: row.supplier_id,
+    receiptDate: row.receipt_date,
+    invoiceNumber: row.invoice_number || '',
+    dispatchNoteNumber: row.dispatch_note_number || '',
+    note: row.note || '',
+    idempotencyKey: row.idempotency_key || '',
+    isDeleted: !!row.is_deleted,
+    createdAt: row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at || new Date().toISOString()
+  };
+}
+
+export function dbToRawMaterialLot(row: any): RawMaterialLot {
+  return {
+    id: row.id,
+    rawMaterialReceiptId: row.raw_material_receipt_id,
+    rawMaterialId: row.raw_material_id,
+    inboundStockMovementId: row.inbound_stock_movement_id,
+    internalLotNo: row.internal_lot_no || '',
+    kunyeNumber: row.kunye_number || '',
+    kunyeStatus: row.kunye_status || 'provided',
+    quantityReceived: toNumber(row.quantity_received, 0),
+    quantityRemaining: toNumber(row.quantity_remaining, 0),
+    unit: row.unit || '',
+    unitPrice: toNumber(row.unit_price, 0),
+    note: row.note || '',
+    isDeleted: !!row.is_deleted,
+    createdAt: row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at || new Date().toISOString()
   };
 }
 
@@ -1639,6 +1702,66 @@ export const supabaseDataService = {
   async saveFinishedGoods(list: FinishedGoodsStock[]): Promise<void> {
     const mapped = list.map(finishedGoodsStockToDb);
     await upsertRows('finished_goods_stocks', mapped);
+  },
+
+  // --- SUPPLIERS, RECEIPTS & LOTS (Purchase Integrations) ---
+  async getSuppliers(): Promise<Supplier[]> {
+    const { data, error } = await supabase
+      .from('suppliers')
+      .select('*')
+      .eq('is_deleted', false)
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+    if (error) throw error;
+    return (data || []).map(dbToSupplier);
+  },
+
+  async getRawMaterialReceipts(): Promise<RawMaterialReceipt[]> {
+    const { data, error } = await supabase
+      .from('raw_material_receipts')
+      .select('*')
+      .eq('is_deleted', false)
+      .order('receipt_date', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map(dbToRawMaterialReceipt);
+  },
+
+  async getRawMaterialLots(): Promise<RawMaterialLot[]> {
+    const { data, error } = await supabase
+      .from('raw_material_lots')
+      .select('*')
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map(dbToRawMaterialLot);
+  },
+
+  async createOrGetSupplierAtomic(name: string, note?: string): Promise<{ supplierId: string; name: string; created: boolean }> {
+    const { data, error } = await supabase.rpc('create_or_get_supplier_atomic', {
+      p_name: name,
+      p_note: note || null
+    });
+    if (error) throw error;
+    return {
+      supplierId: data.supplierId || data.supplier_id,
+      name: data.name,
+      created: !!(data.created || data.already_exists === false)
+    };
+  },
+
+  async createRawMaterialReceiptAtomic(input: CreateRawMaterialReceiptInput): Promise<any> {
+    const { data, error } = await supabase.rpc('create_raw_material_receipt_atomic', {
+      p_supplier_id: input.supplierId,
+      p_receipt_date: input.receiptDate,
+      p_lines: input.lines,
+      p_idempotency_key: input.idempotencyKey,
+      p_invoice_number: input.invoiceNumber || null,
+      p_dispatch_note_number: input.dispatchNoteNumber || null,
+      p_note: input.note || null
+    });
+    if (error) throw error;
+    return data;
   }
 };
 

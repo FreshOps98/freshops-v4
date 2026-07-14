@@ -19,7 +19,7 @@ import React, { useState } from 'react';
  *    - stock_movements -> Her bir stok kaydı bu tabloya yazılır. `raw_material_id` üzerinden hammadde kartına bağlanır.
  *    - raw_materials -> Stok listelerinde hammadde isimleri ve kritik limitleri eşleştirmek için kullanılır.
  */
-import { RawMaterial, StockMovement, StockMovementType, Order, OrderItem, Product, ProductRecipeItem, CostSettings, ProductionRun, FinishedGoodsStock, FinishedGoodsMovement } from '../../types';
+import { RawMaterial, StockMovement, StockMovementType, Order, OrderItem, Product, ProductRecipeItem, CostSettings, ProductionRun, FinishedGoodsStock, FinishedGoodsMovement, Supplier, RawMaterialReceipt, RawMaterialLot, CreateRawMaterialReceiptInput } from '../../types';
 import { calculateUnifiedRawMaterialNeeds, calculateWeightedAverageCost } from '../../services/calcService';
 import { formatCurrency, formatWeight, formatDate, formatShortDate } from '../../utils/format';
 import { Plus, Search, HelpCircle, History, Info, AlertTriangle, ArrowUpRight, ArrowDownLeft, Trash2, Edit2, Calendar, X, Sliders } from 'lucide-react';
@@ -42,6 +42,11 @@ interface StockViewProps {
   onAddMovement: (mov: Omit<StockMovement, 'id' | 'createdAt'>) => void;
   onUpdateMovement: (id: string, updates: Partial<StockMovement>) => void;
   onDeleteMovement: (id: string) => void;
+  suppliers?: Supplier[];
+  rawMaterialReceipts?: RawMaterialReceipt[];
+  rawMaterialLots?: RawMaterialLot[];
+  onCreateOrGetSupplier?: (name: string, note?: string) => Promise<{ supplierId: string; name: string; created: boolean }>;
+  onCreateRawMaterialReceipt?: (input: CreateRawMaterialReceiptInput) => Promise<any>;
 }
 
 export default function StockView({
@@ -60,13 +65,18 @@ export default function StockView({
   finishedGoodsMovements,
   onAddMovement,
   onUpdateMovement,
-  onDeleteMovement
+  onDeleteMovement,
+  suppliers = [],
+  rawMaterialReceipts = [],
+  rawMaterialLots = [],
+  onCreateOrGetSupplier,
+  onCreateRawMaterialReceipt
 }: StockViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'status' | 'movements'>('status');
+  const [activeTab, setActiveTab] = useState<'status' | 'movements' | 'purchase_history'>('status');
   const [stockMovementPage, setStockMovementPage] = useState<number>(1);
 
   // Selected Stock Movement for Editing
@@ -87,6 +97,149 @@ export default function StockView({
   const [correctionReason, setCorrectionReason] = useState<string>('Sayım Farkı');
   const [correctionDate, setCorrectionDate] = useState(getTodayISO());
   const [correctionNote, setCorrectionNote] = useState<string>('');
+
+  // Form states - Purchase Entry / Receipt / Lot
+  const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
+  const [purchaseSupplierId, setPurchaseSupplierId] = useState('');
+  const [purchaseSupplierName, setPurchaseSupplierName] = useState('');
+  const [isCreatingNewSupplier, setIsCreatingNewSupplier] = useState(false);
+  const [purchaseDate, setPurchaseDate] = useState(getTodayISO());
+  const [purchaseInvoiceNumber, setPurchaseInvoiceNumber] = useState('');
+  const [purchaseDispatchNoteNumber, setPurchaseDispatchNoteNumber] = useState('');
+  const [purchaseNote, setPurchaseNote] = useState('');
+  const [purchaseLines, setPurchaseLines] = useState<Array<{
+    rawMaterialId: string;
+    quantity: string;
+    unitPrice: string;
+    kunyeNumber: string;
+    note: string;
+  }>>([]);
+  const [isPurchaseSubmitting, setIsPurchaseSubmitting] = useState(false);
+  const [purchaseIdempotencyKey, setPurchaseIdempotencyKey] = useState('');
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
+
+  // Master Detail Active Receipt State
+  const [selectedReceiptId, setSelectedReceiptId] = useState<string | null>(null);
+
+  // Fast lookups
+  const supplierMap = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    (suppliers || []).forEach(s => {
+      map[s.id] = s.name;
+    });
+    return map;
+  }, [suppliers]);
+
+  const rmMap = React.useMemo(() => {
+    const map: Record<string, { name: string; unit: string }> = {};
+    rawMaterials.forEach(rm => {
+      map[rm.id] = { name: rm.name, unit: rm.unit };
+    });
+    return map;
+  }, [rawMaterials]);
+
+  const handleOpenPurchaseModal = () => {
+    setPurchaseSupplierId('');
+    setPurchaseSupplierName('');
+    setIsCreatingNewSupplier(false);
+    setPurchaseDate(getTodayISO());
+    setPurchaseInvoiceNumber('');
+    setPurchaseDispatchNoteNumber('');
+    setPurchaseNote('');
+    const activeMaterials = rawMaterials.filter(rm => rm.isActive);
+    setPurchaseLines([{ 
+      rawMaterialId: activeMaterials[0]?.id || '', 
+      quantity: '10', 
+      unitPrice: activeMaterials[0]?.purchasePrice?.toString() || '0', 
+      kunyeNumber: '', 
+      note: '' 
+    }]);
+    setPurchaseIdempotencyKey(`purchase-ui-${crypto.randomUUID()}`);
+    setPurchaseError(null);
+    setIsPurchaseModalOpen(true);
+  };
+
+  const handlePurchaseSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPurchaseError(null);
+
+    let finalSupplierId = purchaseSupplierId;
+    if (isCreatingNewSupplier) {
+      if (!purchaseSupplierName.trim()) {
+        setPurchaseError('Lütfen tedarikçi adı girin.');
+        return;
+      }
+    } else {
+      if (!finalSupplierId) {
+        setPurchaseError('Lütfen bir tedarikçi seçin.');
+        return;
+      }
+    }
+
+    if (!purchaseInvoiceNumber.trim() && !purchaseDispatchNoteNumber.trim()) {
+      setPurchaseError('Fatura numarası veya sevk irsaliyesi numarasından en az biri dolu olmalıdır.');
+      return;
+    }
+
+    if (purchaseLines.length === 0) {
+      setPurchaseError('En az bir hammadde satırı eklemelisiniz.');
+      return;
+    }
+
+    for (let i = 0; i < purchaseLines.length; i++) {
+      const line = purchaseLines[i];
+      if (!line.rawMaterialId) {
+        setPurchaseError(`${i + 1}. satırda hammadde seçilmemiş.`);
+        return;
+      }
+      const qty = parseFloat(line.quantity);
+      if (isNaN(qty) || qty <= 0) {
+        setPurchaseError(`${i + 1}. satırda miktar pozitif bir sayı olmalıdır.`);
+        return;
+      }
+      const price = parseFloat(line.unitPrice);
+      if (isNaN(price) || price < 0) {
+        setPurchaseError(`${i + 1}. satırda birim fiyat sıfır veya pozitif bir sayı olmalıdır.`);
+        return;
+      }
+    }
+
+    setIsPurchaseSubmitting(true);
+
+    try {
+      if (isCreatingNewSupplier && onCreateOrGetSupplier) {
+        const supRes = await onCreateOrGetSupplier(purchaseSupplierName.trim(), 'Satın alma girişi sırasında otomatik oluşturuldu.');
+        finalSupplierId = supRes.supplierId;
+      }
+
+      const mappedLines = purchaseLines.map(line => ({
+        raw_material_id: line.rawMaterialId,
+        quantity: parseFloat(line.quantity),
+        unit_price: parseFloat(line.unitPrice),
+        kunye_number: line.kunyeNumber.trim() || null,
+        note: line.note.trim() || null
+      }));
+
+      if (onCreateRawMaterialReceipt) {
+        await onCreateRawMaterialReceipt({
+          supplierId: finalSupplierId,
+          receiptDate: purchaseDate,
+          lines: mappedLines,
+          idempotencyKey: purchaseIdempotencyKey,
+          invoiceNumber: purchaseInvoiceNumber.trim() || undefined,
+          dispatchNoteNumber: purchaseDispatchNoteNumber.trim() || undefined,
+          note: purchaseNote.trim() || undefined
+        });
+      }
+
+      setIsPurchaseModalOpen(false);
+    } catch (err: any) {
+      console.error("Purchase submission error:", err);
+      setPurchaseError(err.message || 'Satın alma girişi sırasında beklenmeyen bir hata oluştu.');
+    } finally {
+      setIsPurchaseSubmitting(false);
+    }
+  };
 
   const todayStr = getTodayISO();
   const tomorrowStr = getTomorrowISO();
@@ -345,24 +498,33 @@ export default function StockView({
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Hammadde Stok Kontrolü</h1>
           <p className="text-sm text-slate-500 mt-1">Hammadde stok seviyeleri, otomatik sipariş kontrolleri ve stok hareket kayıtları.</p>
         </div>
-        <button
-          onClick={() => {
-            const activeMaterials = rawMaterials.filter(rm => rm.isActive);
-            const defaultMaterial = activeMaterials[0] || rawMaterials[0];
-            const defaultId = defaultMaterial ? defaultMaterial.id : '';
-            setRawMaterialId(defaultId);
-            setMovementType('Stok Girişi');
-            setQuantity('10');
-            setUnitPrice(defaultMaterial ? defaultMaterial.purchasePrice.toString() : '');
-            setDate(todayStr);
-            setNote('Satın alma girişi');
-            setIsMovementModalOpen(true);
-          }}
-          className="flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-emerald-700 shadow-sm transition-all cursor-pointer"
-        >
-          <Plus size={16} />
-          Stok Hareketi Ekle
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleOpenPurchaseModal}
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer border border-indigo-700/20 animate-pulse hover:animate-none"
+          >
+            <Plus size={16} />
+            Satın Alma Girişi
+          </button>
+          <button
+            onClick={() => {
+              const activeMaterials = rawMaterials.filter(rm => rm.isActive);
+              const defaultMaterial = activeMaterials[0] || rawMaterials[0];
+              const defaultId = defaultMaterial ? defaultMaterial.id : '';
+              setRawMaterialId(defaultId);
+              setMovementType('Stok Girişi');
+              setQuantity('10');
+              setUnitPrice(defaultMaterial ? defaultMaterial.purchasePrice.toString() : '');
+              setDate(todayStr);
+              setNote('Satın alma girişi');
+              setIsMovementModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-emerald-700 shadow-sm transition-all cursor-pointer"
+          >
+            <Plus size={16} />
+            Manuel Hareket Ekle
+          </button>
+        </div>
       </div>
 
       {/* TOMORROW STOCK DEFICIT WARNING BOARD */}
@@ -399,6 +561,19 @@ export default function StockView({
           }`}
         >
           Stok Hareket Geçmişi
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('purchase_history');
+            if (rawMaterialReceipts.length > 0 && !selectedReceiptId) {
+              setSelectedReceiptId(rawMaterialReceipts[0].id);
+            }
+          }}
+          className={`pb-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+            activeTab === 'purchase_history' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-400 hover:text-slate-600'
+          }`}
+        >
+          Satın Alma / Lot Geçmişi
         </button>
       </div>
 
@@ -1026,6 +1201,322 @@ export default function StockView({
                 >
                   Düzeltmeyi Kaydet
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* PURCHASE ENTRY (SATIN ALMA GİRİŞİ) MODAL */}
+      {isPurchaseModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-xl max-w-4xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between bg-slate-50 px-5 py-4 border-b border-slate-100 shrink-0">
+              <div>
+                <h3 className="font-bold text-slate-800 text-sm">Yeni Satın Alma Girişi ve Lot Tanımlama</h3>
+                <p className="text-[10px] text-slate-400 font-semibold mt-0.5 font-mono select-all">Benzersiz Talep Anahtarı: {purchaseIdempotencyKey}</p>
+              </div>
+              <button 
+                onClick={() => {
+                  if (!isPurchaseSubmitting) {
+                    setIsPurchaseModalOpen(false);
+                  }
+                }} 
+                disabled={isPurchaseSubmitting}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer disabled:opacity-50"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <form onSubmit={handlePurchaseSubmit} className="flex-1 overflow-y-auto p-5 space-y-5">
+              {purchaseError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-xl text-xs font-semibold flex items-center gap-2">
+                  <AlertTriangle size={16} className="text-rose-500" />
+                  <span>{purchaseError}</span>
+                </div>
+              )}
+
+              {/* Tedarikçi Bilgileri */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <h4 className="text-xs font-bold text-slate-700">Tedarikçi Seçimi / Tanımı</h4>
+                  <div className="flex bg-slate-200 p-0.5 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingNewSupplier(false)}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
+                        !isCreatingNewSupplier ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/55'
+                      }`}
+                    >
+                      Kayıtlı Tedarikçi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingNewSupplier(true)}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
+                        isCreatingNewSupplier ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/55'
+                      }`}
+                    >
+                      Yeni Tedarikçi Yarat
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {isCreatingNewSupplier ? (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Yeni Tedarikçi Adı *</label>
+                      <input
+                        type="text"
+                        required
+                        value={purchaseSupplierName}
+                        onChange={(e) => setPurchaseSupplierName(e.target.value)}
+                        placeholder="Örn: Taze Gıda Ltd. Şti."
+                        className="w-full bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Tedarikçi Seçin *</label>
+                      <select
+                        required
+                        value={purchaseSupplierId}
+                        onChange={(e) => setPurchaseSupplierId(e.target.value)}
+                        className="w-full bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="">Seçiniz...</option>
+                        {(suppliers || []).map(sup => (
+                          <option key={sup.id} value={sup.id}>{sup.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Satın Alma Giriş Tarihi *</label>
+                    <input
+                      type="date"
+                      required
+                      value={purchaseDate}
+                      onChange={(e) => setPurchaseDate(e.target.value)}
+                      className="w-full bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Belge & Fiş Bilgileri */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Fatura Numarası</label>
+                  <input
+                    type="text"
+                    value={purchaseInvoiceNumber}
+                    onChange={(e) => setPurchaseInvoiceNumber(e.target.value)}
+                    placeholder="E-Fatura veya Seri No"
+                    className="w-full bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Sevk İrsaliye Numarası</label>
+                  <input
+                    type="text"
+                    value={purchaseDispatchNoteNumber}
+                    onChange={(e) => setPurchaseDispatchNoteNumber(e.target.value)}
+                    placeholder="İrsaliye No"
+                    className="w-full bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Genel Fiş Açıklaması</label>
+                  <input
+                    type="text"
+                    value={purchaseNote}
+                    onChange={(e) => setPurchaseNote(e.target.value)}
+                    placeholder="Ek açıklama veya not..."
+                    className="w-full bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Hammadde Giriş Kalemleri */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                  <h4 className="text-xs font-bold text-slate-700">Satın Alınan Hammaddeler & Kalemler</h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const activeMaterials = rawMaterials.filter(rm => rm.isActive);
+                      setPurchaseLines([
+                        ...purchaseLines,
+                        {
+                          rawMaterialId: activeMaterials[0]?.id || '',
+                          quantity: '10',
+                          unitPrice: activeMaterials[0]?.purchasePrice?.toString() || '0',
+                          kunyeNumber: '',
+                          note: ''
+                        }
+                      ]);
+                    }}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 transition-colors cursor-pointer"
+                  >
+                    + Yeni Satır Ekle
+                  </button>
+                </div>
+
+                <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1">
+                  {purchaseLines.map((line, idx) => {
+                    const selectedRM = rawMaterials.find(r => r.id === line.rawMaterialId);
+                    const rmUnit = selectedRM?.unit || '';
+
+                    return (
+                      <div key={idx} className="bg-slate-50/50 p-3 rounded-xl border border-slate-100 grid grid-cols-1 md:grid-cols-12 gap-3 items-end font-sans">
+                        <div className="md:col-span-3">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Hammadde *</label>
+                          <select
+                            required
+                            value={line.rawMaterialId}
+                            onChange={(e) => {
+                              const updated = [...purchaseLines];
+                              updated[idx].rawMaterialId = e.target.value;
+                              const rm = rawMaterials.find(r => r.id === e.target.value);
+                              if (rm) {
+                                updated[idx].unitPrice = rm.purchasePrice.toString();
+                              }
+                              setPurchaseLines(updated);
+                            }}
+                            className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
+                          >
+                            <option value="" disabled>Hammadde Seçin</option>
+                            {rawMaterials.filter(rm => rm.isActive).map(rm => (
+                              <option key={rm.id} value={rm.id}>{rm.name} ({rm.unit})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Miktar ({rmUnit || 'Birim'}) *</label>
+                          <input
+                            type="text"
+                            required
+                            value={line.quantity}
+                            onChange={(e) => {
+                              const updated = [...purchaseLines];
+                              updated[idx].quantity = e.target.value;
+                              setPurchaseLines(updated);
+                            }}
+                            placeholder="Miktar"
+                            className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Birim Fiyat (TL) *</label>
+                          <input
+                            type="text"
+                            required
+                            value={line.unitPrice}
+                            onChange={(e) => {
+                              const updated = [...purchaseLines];
+                              updated[idx].unitPrice = e.target.value;
+                              setPurchaseLines(updated);
+                            }}
+                            placeholder="TL Fiyat"
+                            className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Künye No / Kodu</label>
+                          <input
+                            type="text"
+                            value={line.kunyeNumber}
+                            onChange={(e) => {
+                              const updated = [...purchaseLines];
+                              updated[idx].kunyeNumber = e.target.value;
+                              setPurchaseLines(updated);
+                            }}
+                            placeholder="Opsiyonel"
+                            className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none font-mono"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Satır Açıklaması</label>
+                          <input
+                            type="text"
+                            value={line.note}
+                            onChange={(e) => {
+                              const updated = [...purchaseLines];
+                              updated[idx].note = e.target.value;
+                              setPurchaseLines(updated);
+                            }}
+                            placeholder="Detaylar..."
+                            className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="md:col-span-1 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (purchaseLines.length > 1) {
+                                setPurchaseLines(purchaseLines.filter((_, i) => i !== idx));
+                              }
+                            }}
+                            disabled={purchaseLines.length <= 1}
+                            className="text-xs text-rose-500 hover:text-rose-700 disabled:opacity-30 disabled:cursor-not-allowed p-1.5 rounded hover:bg-rose-50 cursor-pointer"
+                            title="Satırı Sil"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Toplam Bilgi ve Alt Butonlar */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-t border-slate-100 pt-4 gap-4 shrink-0 font-sans">
+                <div className="text-xs text-slate-500">
+                  Toplam Tutar:{' '}
+                  <span className="font-bold text-slate-800 text-sm">
+                    {formatCurrency(
+                      purchaseLines.reduce((sum, line) => {
+                        const q = parseFloat(line.quantity) || 0;
+                        const p = parseFloat(line.unitPrice) || 0;
+                        return sum + q * p;
+                      }, 0)
+                    )}
+                  </span>
+                </div>
+
+                <div className="flex justify-end gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsPurchaseModalOpen(false)}
+                    disabled={isPurchaseSubmitting}
+                    className="px-4 py-2 border border-slate-200 text-xs font-semibold rounded-lg text-slate-500 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+                  >
+                    İptal Et
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isPurchaseSubmitting}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg disabled:bg-indigo-400 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {isPurchaseSubmitting ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Kaydediliyor...</span>
+                      </>
+                    ) : (
+                      <span>Satın Alma Girişini Tamamla</span>
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
