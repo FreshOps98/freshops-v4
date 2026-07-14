@@ -1,0 +1,309 @@
+export type CustomerType = 'Otel' | 'Kafe' | 'Restoran' | 'Catering' | 'Market' | 'Kurumsal' | 'Diğer';
+
+export interface Customer {
+  id: string;
+  name: string;
+  type: CustomerType;
+  phone: string;
+  email: string;
+  address: string;
+  deliveryNote: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+}
+
+export type RawMaterialCategory = 'Meyve' | 'Sebze' | 'Ambalaj' | 'Yardımcı Malzeme' | 'Diğer';
+export type RawMaterialUnit = 'kg' | 'adet' | 'paket';
+
+export interface RawMaterial {
+  id: string;
+  name: string;
+  category: RawMaterialCategory;
+  unit: RawMaterialUnit;
+  purchasePrice: number;
+  averageCost?: number; // Hareketli ağırlıklı ortalama maliyet
+  defaultWasteRate: number; // in percent (e.g., 40 for 40%)
+  defaultYieldRate: number; // in percent (e.g., 60 for 60%)
+  criticalStockLevel: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  currentStock?: number;
+}
+
+export type ProductCategory = 'Ananas' | 'Meyve Mix' | 'Sebze Mix' | 'Salata Mix' | 'Tekli Meyve' | 'Tekli Sebze' | 'Diğer';
+
+export interface Product {
+  id: string;
+  name: string;
+  category: ProductCategory;
+  packageWeightGrams: number;
+  salePrice: number;
+  defaultSafetyRate: number; // in percent (e.g., 3 for 3%)
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  lotPrefix?: string;
+}
+
+export interface ProductRecipeItem {
+  id: string;
+  productId: string;
+  rawMaterialId: string;
+  quantity: number; // quantity in recipe (e.g., grams for kg, or count for pieces)
+  unit: 'g' | 'adet' | 'paket';
+  wasteRateOverride?: number; // custom waste rate if overridden
+  notes?: string;
+}
+
+export type StockMovementType = 'Stok Girişi' | 'Stok Çıkışı' | 'Fire Çıkışı' | 'Üretim Tüketimi' | 'Sayım Düzeltmesi' | 'Giriş' | 'Çıkış' | 'Fire' | 'Düzeltme' | 'Üretim tüketimi' | 'Üretim Silme İadesi' | 'Üretim Geri Alma';
+
+export interface StockMovement {
+  id: string;
+  rawMaterialId: string;
+  type: StockMovementType;
+  quantity: number;
+  unit?: string;
+  date: string;
+  note: string;
+  createdAt: string;
+  unitPrice?: number;
+  totalCost?: number;
+  productionPlanId?: string;
+  productionPlanItemId?: string;
+  orderId?: string;
+  orderItemId?: string;
+  productId?: string;
+  productionRunId?: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+}
+
+export type OrderStatus = 'Taslak' | 'Onaylandı' | 'Üretim Planlandı' | 'Üretildi' | 'Sevkiyata Hazır' | 'Kısmi Sevk' | 'Sevk Edildi' | 'İptal';
+export type OrderApprovalStatus = 'Taslak' | 'Onaylandı' | 'İptal';
+export type OrderComputedStatus = 'Taslak' | 'Onaylandı' | 'Üretim Planlandı' | 'Üretildi' | 'Sevkiyata Hazır' | 'Kısmi Sevk' | 'Sevk Edildi' | 'İptal';
+
+export interface Order {
+  id: string;
+  orderNumber?: string;
+  customerId: string;
+  orderDate: string; // YYYY-MM-DD
+  deliveryDate: string; // YYYY-MM-DD
+  status: OrderStatus;
+  approvalStatus: OrderApprovalStatus;
+  computedStatus: OrderComputedStatus;
+  totalAmount?: number;
+  realizedAmount?: number;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  costSettingsSnapshot?: {
+    defaultSafetyRate: number;
+    laborCostPerPackage: number;
+    overheadCostPerPackage: number;
+    deliveryCostPerPackage: number;
+  };
+}
+
+export interface OrderItem {
+  id: string;
+  orderId: string;
+  productId: string;
+  quantity: number;
+  unit?: string;
+  unitSalePrice: number;
+  totalPrice?: number;
+  safetyRateOverride?: number;
+  wasteRateOverrides?: Record<string, number>; // rawMaterialId -> wasteRate override
+  note?: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type ProductionPlanStatus = 'Bekliyor' | 'Hazırlanıyor' | 'Üretimde' | 'Tamamlandı' | 'Eksik üretildi' | 'İptal' | 'Planlandı' | 'Kısmi Üretildi' | 'Boş Plan' | 'Planın Gerisinde' | 'Plan Üstü Üretim' | 'Eksikle Kapatıldı' | 'Devirle Tamamlandı' | 'Sonraki Günde Tamamlandı';
+
+export interface ProductionPlan {
+  id: string;
+  productionDate: string; // YYYY-MM-DD
+  date?: string; // YYYY-MM-DD for backward compatibility
+  status: ProductionPlanStatus;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  closedAt?: string;
+  closedWithShortage?: boolean;
+  carriedOverToPlanIds?: string[];
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  isLocked?: boolean;
+  lockedAt?: string;
+  lockedReason?: string;
+}
+
+export interface ProductionPlanItem {
+  id: string;
+  productionPlanId: string;
+  orderId: string;
+  orderItemId: string;
+  customerId: string;
+  productId: string;
+  plannedQuantity: number;
+  producedQuantity: number;
+  status: ProductionPlanStatus;
+  note: string;
+  rawMaterialsDeducted?: boolean;
+  deductedAt?: string;
+  deductionMovementIds?: string[];
+  finishedGoodsCreated?: boolean;
+  finishedGoodsStockId?: string;
+  estimatedTotalCost?: number;
+  unitCost?: number;
+  isCarryOver?: boolean;
+  sourceCarryOverFromPlanId?: string;
+  sourceCarryOverFromPlanItemId?: string;
+  carryOverReason?: string;
+  carryOverCreatedAt?: string;
+  carryOverQuantityTotal?: number;
+  carryOverSources?: {
+    planId: string;
+    planItemId: string;
+    quantity: number;
+    date: string;
+  }[];
+  createdAt?: string;
+  updatedAt?: string;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedReason?: string;
+  isLocked?: boolean;
+  lockedAt?: string;
+  lockedReason?: string;
+}
+
+export type FinishedGoodsStatus = 'Stokta' | 'Sevkiyata Hazır' | 'Sevk Edildi' | 'İptal' | 'Fire' | 'Kısmi Sevk';
+
+export interface FinishedGoodsStock {
+  id: string;
+  productId: string;
+  customerId: string;
+  orderId: string;
+  orderItemId: string;
+  productionPlanId: string;
+  productionPlanItemId: string;
+  productionRunId?: string;
+  productionDate: string; // YYYY-MM-DD
+  deliveryDate: string; // YYYY-MM-DD
+  quantityProduced: number;
+  quantityRemaining: number;
+  status: FinishedGoodsStatus;
+  unitCost: number;
+  totalCost: number;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  lotNo?: string;
+  lotDate?: string;
+  lotDateOffsetDays?: number;
+}
+
+export type FinishedGoodsMovementType = 'Üretim girişi' | 'Sevkiyat çıkışı' | 'Fire çıkışı' | 'İptal' | 'Sayım düzeltmesi' | 'Üretim Geri Alındı' | 'Üretim Geri Alma';
+
+export interface FinishedGoodsMovement {
+  id: string;
+  finishedGoodsStockId: string;
+  productId: string;
+  customerId: string;
+  orderId: string;
+  orderItemId: string;
+  type: FinishedGoodsMovementType;
+  quantity: number;
+  date: string; // YYYY-MM-DD
+  note: string;
+  createdAt: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  productionRunId?: string;
+  movementType?: string;
+  isShipment?: boolean;
+  reason?: string;
+  previousQuantity?: number;
+  newQuantity?: number;
+  difference?: number;
+  adjustmentQuantity?: number;
+  lotNo?: string;
+}
+
+export type WasteReason = 'Kabuk' | 'Çekirdek' | 'Ezilme' | 'Çürük' | 'Gramaj sapması' | 'Üretim hatası' | 'Müşteri iptali' | 'Diğer';
+
+export interface WasteRecord {
+  id: string;
+  rawMaterialId: string;
+  productId?: string;
+  productionPlanId?: string;
+  inputQuantity: number; // ham miktar
+  usableQuantity: number; // kullanılabilir net miktar
+  wasteQuantity: number; // fire miktarı
+  wasteRate: number; // calculated %
+  yieldRate: number; // calculated %
+  reason: WasteReason;
+  date: string; // YYYY-MM-DD
+  note: string;
+}
+
+export interface CostSettings {
+  defaultSafetyRate: number;
+  laborCostPerPackage: number;
+  overheadCostPerPackage: number;
+  deliveryCostPerPackage: number;
+  useAverageWasteRate: boolean; // Settings option: Son 30 gün fire ortalamasını öneri olarak göster/kullan
+  stockWarningThreshold: number; // Stok uyarı eşiği
+  lotDateOffsetDays?: number;
+  currency?: string;
+}
+
+export interface ProductionRun {
+  id: string;
+  productionPlanId: string;
+  productionPlanItemId: string;
+  orderId: string;
+  orderItemId: string;
+  customerId: string;
+  productId: string;
+  producedQuantity: number;
+  productionDate: string;
+  note: string;
+  rawMaterialsDeducted?: boolean;
+  rawMaterialMovementIds?: string[];
+  finishedGoodsCreated?: boolean;
+  finishedGoodsStockId?: string;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: boolean;
+  isDemo?: boolean;
+  lotNo?: string;
+  lotDate?: string;
+  lotDateOffsetDays?: number;
+}
+
+export interface CloseProductionPlanAction {
+  planItemId: string;
+  action: 'carry_tomorrow' | 'carry_date' | 'close_without_carry';
+  targetDate?: string;
+  plan_item_id?: string;  // snake_case backup
+  target_date?: string;  // snake_case backup
+}
+

@@ -1,0 +1,8 @@
+{
+  "name": "FreshOps DB 7 PROD Yeni DB Final - Ek Geliştirme Kalite Modülü",
+  "description": "Paketli taze meyve-sebze üreticileri için reçete, stok, hammadde ve üretim planı yönetim paneli.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
