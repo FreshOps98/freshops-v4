@@ -14,6 +14,7 @@ AS $$
 DECLARE
   v_org_id UUID;
   v_order_json JSONB;
+  v_customer_json JSONB;
   v_order_items_json JSONB;
   v_production_runs_json JSONB;
   v_shipment_movements_json JSONB;
@@ -33,9 +34,10 @@ BEGIN
     RAISE EXCEPTION 'Sipariş kaydı bulunamadı veya bu işleme yetkiniz yok.';
   END IF;
 
-  -- Build order object (with nested customer object via LEFT JOIN)
+  -- Build order object (removed nested customer object, added customerId)
   SELECT jsonb_build_object(
     'id', o.id,
+    'customerId', o.customer_id,
     'orderNumber', o.order_number,
     'orderDate', o.order_date,
     'deliveryDate', o.delivery_date,
@@ -45,21 +47,26 @@ BEGIN
     'totalAmount', o.total_amount,
     'realizedAmount', o.realized_amount,
     'note', o.note,
-    'isDeleted', o.is_deleted,
-    'customer', CASE
-                  WHEN c.id IS NOT NULL THEN jsonb_build_object(
-                    'id', c.id,
-                    'name', c.name
-                  )
-                  ELSE NULL
-                END
+    'isDeleted', o.is_deleted
   )
   INTO v_order_json
+  FROM public.orders o
+  WHERE o.id = p_order_id AND o.organization_id = v_org_id;
+
+  -- Build top-level customer object separately (returns NULL if not found)
+  SELECT CASE
+    WHEN c.id IS NOT NULL THEN jsonb_build_object(
+      'id', c.id,
+      'name', c.name
+    )
+    ELSE NULL
+  END
+  INTO v_customer_json
   FROM public.orders o
   LEFT JOIN public.customers c ON c.id = o.customer_id AND c.organization_id = v_org_id
   WHERE o.id = p_order_id AND o.organization_id = v_org_id;
 
-  -- Build order items array (sorted deterministically)
+  -- Build order items array (sorted deterministically, left join products to keep historical rows)
   SELECT COALESCE(jsonb_agg(
     jsonb_build_object(
       'id', oi.id,
@@ -74,7 +81,7 @@ BEGIN
   ), '[]'::jsonb)
   INTO v_order_items_json
   FROM public.order_items oi
-  JOIN public.products p ON p.id = oi.product_id AND p.organization_id = v_org_id
+  LEFT JOIN public.products p ON p.id = oi.product_id AND p.organization_id = v_org_id
   WHERE oi.order_id = p_order_id
     AND oi.organization_id = v_org_id;
 
@@ -127,6 +134,7 @@ BEGIN
   RETURN jsonb_build_object(
     'success', TRUE,
     'order', v_order_json,
+    'customer', v_customer_json,
     'orderItems', v_order_items_json,
     'productionRuns', v_production_runs_json,
     'shipmentMovements', v_shipment_movements_json
@@ -213,12 +221,16 @@ BEGIN
               'movementType', sm.movement_type,
               'movementDate', sm.movement_date::TEXT,
               'quantity', sm.quantity,
-              'isDeleted', sm.is_deleted
+              'isDeleted', sm.is_deleted,
+              'previousStock', sm.previous_stock,
+              'newStock', sm.new_stock,
+              'unitPrice', sm.unit_price
             ),
             'productionUsages', (
               SELECT COALESCE(jsonb_agg(
                 jsonb_build_object(
                   'allocationId', alloc.id,
+                  'allocationMethod', alloc.allocation_method,
                   'productionRunId', alloc.production_run_id,
                   'quantityConsumed', alloc.quantity_consumed,
                   'unit', alloc.unit,
@@ -230,6 +242,10 @@ BEGIN
                     'id', pr.id,
                     'status', pr.status,
                     'producedQuantity', pr.produced_quantity,
+                    'productionDate', pr.production_date,
+                    'isDeleted', pr.is_deleted,
+                    'deletedAt', pr.deleted_at,
+                    'deletedReason', pr.deleted_reason,
                     'createdAt', pr.created_at
                   ),
                   'finishedGoodsStock', CASE
@@ -239,7 +255,8 @@ BEGIN
                       'quantityProduced', fgs.quantity_produced,
                       'quantityRemaining', fgs.quantity_remaining,
                       'unit', fgs.unit,
-                      'status', fgs.status
+                      'status', fgs.status,
+                      'isDeleted', fgs.is_deleted
                     )
                     ELSE NULL
                   END,
@@ -252,23 +269,63 @@ BEGIN
                     )
                     ELSE NULL
                   END,
-                  'product', jsonb_build_object(
-                    'id', p.id,
-                    'name', p.name
-                  )
+                  'customer', CASE
+                    WHEN c.id IS NOT NULL THEN jsonb_build_object(
+                      'id', c.id,
+                      'name', c.name
+                    )
+                    ELSE NULL
+                  END,
+                  'product', CASE
+                    WHEN p.id IS NOT NULL THEN jsonb_build_object(
+                      'id', p.id,
+                      'name', p.name
+                    )
+                    ELSE NULL
+                  END
                 )
-                ORDER BY alloc.created_at ASC, alloc.id ASC
+                ORDER BY
+                  pr.created_at DESC,
+                  alloc.created_at DESC,
+                  alloc.id DESC
               ), '[]'::jsonb)
               FROM public.production_run_raw_material_lot_allocations alloc
               JOIN public.production_runs pr ON pr.id = alloc.production_run_id AND pr.organization_id = v_org_id
-              LEFT JOIN public.finished_goods_stocks fgs ON fgs.production_run_id = pr.id AND fgs.organization_id = v_org_id
+              LEFT JOIN LATERAL (
+                SELECT fgs_candidate.*
+                FROM public.finished_goods_stocks fgs_candidate
+                WHERE fgs_candidate.organization_id = v_org_id
+                  AND (
+                    (
+                      pr.finished_goods_stock_id IS NOT NULL
+                      AND fgs_candidate.id = pr.finished_goods_stock_id
+                    )
+                    OR
+                    (
+                      pr.finished_goods_stock_id IS NULL
+                      AND fgs_candidate.production_run_id = pr.id
+                    )
+                  )
+                ORDER BY
+                  CASE
+                    WHEN fgs_candidate.id = pr.finished_goods_stock_id THEN 0
+                    ELSE 1
+                  END,
+                  fgs_candidate.created_at DESC,
+                  fgs_candidate.id DESC
+                LIMIT 1
+              ) fgs ON TRUE
               LEFT JOIN public.orders o ON o.id = alloc.order_id AND o.organization_id = v_org_id
-              JOIN public.products p ON p.id = alloc.product_id AND p.organization_id = v_org_id
+              LEFT JOIN public.customers c ON c.id = COALESCE(o.customer_id, fgs.customer_id) AND c.organization_id = v_org_id
+              LEFT JOIN public.products p ON p.id = alloc.product_id AND p.organization_id = v_org_id
               WHERE alloc.raw_material_lot_id = rml.id
                 AND alloc.organization_id = v_org_id
             )
           )
-          ORDER BY rml.created_at ASC, rml.id ASC
+          ORDER BY
+            rm.name ASC,
+            rml.created_at ASC,
+            rml.id ASC
         ), '[]'::jsonb)
         FROM public.raw_material_lots rml
         JOIN public.raw_materials rm ON rm.id = rml.raw_material_id AND rm.organization_id = v_org_id
@@ -277,7 +334,10 @@ BEGIN
           AND rml.organization_id = v_org_id
       )
     )
-    ORDER BY rmr.receipt_date ASC, rmr.id ASC
+    ORDER BY
+      rmr.receipt_date DESC,
+      rmr.created_at DESC,
+      rmr.id DESC
   ), '[]'::jsonb)
   INTO v_receipts_json
   FROM public.raw_material_receipts rmr
