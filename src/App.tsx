@@ -1303,6 +1303,12 @@ export default function App() {
   };
 
   const handleUpdateStockMovement = async (id: string, updates: Partial<StockMovement>) => {
+    const isBoundToLot = rawMaterialLots.some(lot => lot.inboundStockMovementId === id);
+    if (isBoundToLot) {
+      alert("Lot ile bağlı satın alma hareketleri manuel olarak değiştirilemez.");
+      return;
+    }
+
     if (USE_SUPABASE) {
       try {
         await dataService.updateCleanStockMovement(id, updates);
@@ -1357,6 +1363,12 @@ export default function App() {
   };
 
   const handleDeleteStockMovement = async (id: string) => {
+    const isBoundToLot = rawMaterialLots.some(lot => lot.inboundStockMovementId === id);
+    if (isBoundToLot) {
+      alert("Lot ile bağlı satın alma hareketleri manuel olarak değiştirilemez.");
+      return;
+    }
+
     if (USE_SUPABASE) {
       try {
         await dataService.deleteCleanStockMovement(id);

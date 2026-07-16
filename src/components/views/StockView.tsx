@@ -19,7 +19,7 @@ import React, { useState } from 'react';
  *    - stock_movements -> Her bir stok kaydı bu tabloya yazılır. `raw_material_id` üzerinden hammadde kartına bağlanır.
  *    - raw_materials -> Stok listelerinde hammadde isimleri ve kritik limitleri eşleştirmek için kullanılır.
  */
-import { RawMaterial, StockMovement, StockMovementType, Order, OrderItem, Product, ProductRecipeItem, CostSettings, ProductionRun, FinishedGoodsStock, FinishedGoodsMovement, Supplier, RawMaterialReceipt, RawMaterialLot, CreateRawMaterialReceiptInput } from '../../types';
+import { RawMaterial, StockMovement, StockMovementType, Order, OrderItem, Product, ProductRecipeItem, CostSettings, ProductionRun, FinishedGoodsStock, FinishedGoodsMovement, Supplier, RawMaterialReceipt, RawMaterialLot, CreateRawMaterialReceiptInput, RawMaterialReceiptLineInput } from '../../types';
 import { calculateUnifiedRawMaterialNeeds, calculateWeightedAverageCost } from '../../services/calcService';
 import { formatCurrency, formatWeight, formatDate, formatShortDate } from '../../utils/format';
 import { Plus, Search, HelpCircle, History, Info, AlertTriangle, ArrowUpRight, ArrowDownLeft, Trash2, Edit2, Calendar, X, Sliders } from 'lucide-react';
@@ -112,6 +112,7 @@ export default function StockView({
     quantity: string;
     unitPrice: string;
     kunyeNumber: string;
+    kunyeStatus: 'provided' | 'internal_placeholder';
     note: string;
   }>>([]);
   const [isPurchaseSubmitting, setIsPurchaseSubmitting] = useState(false);
@@ -138,6 +139,36 @@ export default function StockView({
     return map;
   }, [rawMaterials]);
 
+  // Memoized sorted receipts and safe selections
+  const sortedReceipts = React.useMemo(() => {
+    return [...(rawMaterialReceipts || [])].sort((a, b) => {
+      const dateA = a.receiptDate || '';
+      const dateB = b.receiptDate || '';
+      if (dateB !== dateA) {
+        return dateB.localeCompare(dateA);
+      }
+      const createdA = a.createdAt || '';
+      const createdB = b.createdAt || '';
+      return createdB.localeCompare(createdA);
+    });
+  }, [rawMaterialReceipts]);
+
+  const activeReceiptId = React.useMemo(() => {
+    if (sortedReceipts.length === 0) return null;
+    const exists = sortedReceipts.some(r => r.id === selectedReceiptId);
+    if (!exists) return sortedReceipts[0].id;
+    return selectedReceiptId;
+  }, [sortedReceipts, selectedReceiptId]);
+
+  const selectedReceipt = React.useMemo(() => {
+    return sortedReceipts.find(r => r.id === activeReceiptId) || null;
+  }, [sortedReceipts, activeReceiptId]);
+
+  const selectedReceiptLots = React.useMemo(() => {
+    if (!activeReceiptId) return [];
+    return (rawMaterialLots || []).filter(lot => lot.rawMaterialReceiptId === activeReceiptId && !lot.isDeleted);
+  }, [rawMaterialLots, activeReceiptId]);
+
   const handleOpenPurchaseModal = () => {
     setPurchaseSupplierId('');
     setPurchaseSupplierName('');
@@ -152,6 +183,7 @@ export default function StockView({
       quantity: '10', 
       unitPrice: activeMaterials[0]?.purchasePrice?.toString() || '0', 
       kunyeNumber: '', 
+      kunyeStatus: 'provided',
       note: '' 
     }]);
     setPurchaseIdempotencyKey(`purchase-ui-${crypto.randomUUID()}`);
@@ -162,6 +194,11 @@ export default function StockView({
   const handlePurchaseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPurchaseError(null);
+
+    if (!onCreateOrGetSupplier || !onCreateRawMaterialReceipt) {
+      setPurchaseError("Satın alma servisi kullanılamıyor.");
+      return;
+    }
 
     let finalSupplierId = purchaseSupplierId;
     if (isCreatingNewSupplier) {
@@ -202,6 +239,10 @@ export default function StockView({
         setPurchaseError(`${i + 1}. satırda birim fiyat sıfır veya pozitif bir sayı olmalıdır.`);
         return;
       }
+      if (!line.kunyeNumber.trim()) {
+        setPurchaseError(`${i + 1}. satırda künye numarası zorunludur.`);
+        return;
+      }
     }
 
     setIsPurchaseSubmitting(true);
@@ -212,11 +253,12 @@ export default function StockView({
         finalSupplierId = supRes.supplierId;
       }
 
-      const mappedLines = purchaseLines.map(line => ({
+      const mappedLines: RawMaterialReceiptLineInput[] = purchaseLines.map(line => ({
         raw_material_id: line.rawMaterialId,
         quantity: parseFloat(line.quantity),
         unit_price: parseFloat(line.unitPrice),
-        kunye_number: line.kunyeNumber.trim() || null,
+        kunye_number: line.kunyeNumber.trim(),
+        kunye_status: line.kunyeStatus,
         note: line.note.trim() || null
       }));
 
@@ -324,6 +366,11 @@ export default function StockView({
 
   const handleAddMovementSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (movementType === 'Stok Girişi' || movementType === 'Giriş') {
+      alert("Satın alma kaynaklı stok girişleri Satın Alma Girişi ekranından kaydedilmelidir.");
+      return;
+    }
+
     if (!rawMaterialId) {
       alert('Bu alan boş bırakılamaz.');
       return;
@@ -413,6 +460,12 @@ export default function StockView({
 
   // Open Edit Stock Movement Modal
   const handleOpenEditMovement = (mov: StockMovement) => {
+    const isBoundToLot = (rawMaterialLots || []).some(lot => lot.inboundStockMovementId === mov.id);
+    if (isBoundToLot) {
+      alert("Lot ile bağlı satın alma hareketleri manuel olarak değiştirilemez.");
+      return;
+    }
+
     const isProductionRelated = mov.productionPlanItemId !== undefined && mov.productionPlanItemId !== null;
     if (isProductionRelated) {
       if (!confirm('Uygulama Uyarısı:\nBu hareket üretim tamamlamadan oluşmuş. Düzenleme üretim kayıtlarını etkileyebilir. Devam etmek istiyor musunuz?')) {
@@ -445,6 +498,12 @@ export default function StockView({
     }
 
     const isIncoming = movementType === 'Stok Girişi' || movementType === 'Giriş';
+    const wasIncoming = editingMovement.type === 'Stok Girişi' || editingMovement.type === 'Giriş';
+    if (isIncoming && !wasIncoming) {
+      alert("Satın alma kaynaklı stok girişleri Satın Alma Girişi ekranından kaydedilmelidir.");
+      return;
+    }
+
     let priceNum = 0;
     if (isIncoming) {
       if (unitPrice === undefined || unitPrice === null || unitPrice.trim() === '') {
@@ -473,6 +532,12 @@ export default function StockView({
   };
 
   const handleDeleteMovement = (mov: StockMovement) => {
+    const isBoundToLot = (rawMaterialLots || []).some(lot => lot.inboundStockMovementId === mov.id);
+    if (isBoundToLot) {
+      alert("Lot ile bağlı satın alma hareketleri manuel olarak değiştirilemez.");
+      return;
+    }
+
     const isProductionRelated = mov.productionPlanItemId !== undefined && mov.productionPlanItemId !== null;
     let confirmMsg = 'Bu stok hareket kaydını silmek istediğinize emin misiniz?';
     if (isProductionRelated) {
@@ -512,17 +577,17 @@ export default function StockView({
               const defaultMaterial = activeMaterials[0] || rawMaterials[0];
               const defaultId = defaultMaterial ? defaultMaterial.id : '';
               setRawMaterialId(defaultId);
-              setMovementType('Stok Girişi');
+              setMovementType('Stok Çıkışı');
               setQuantity('10');
-              setUnitPrice(defaultMaterial ? defaultMaterial.purchasePrice.toString() : '');
+              setUnitPrice('');
               setDate(todayStr);
-              setNote('Satın alma girişi');
+              setNote('');
               setIsMovementModalOpen(true);
             }}
             className="flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-emerald-700 shadow-sm transition-all cursor-pointer"
           >
             <Plus size={16} />
-            Manuel Hareket Ekle
+            Diğer Stok Hareketi
           </button>
         </div>
       </div>
@@ -711,7 +776,7 @@ export default function StockView({
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'movements' ? (
         /* MOVEMENTS LOG VIEW */
         (() => {
           const STOCK_MOVEMENT_PAGE_SIZE = 50;
@@ -853,6 +918,141 @@ export default function StockView({
             </div>
           );
         })()
+      ) : (
+        /* PURCHASE / LOT HISTORY VIEW */
+        sortedReceipts.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-100 p-10 text-center text-slate-400 font-medium font-sans">
+            Kayıtlı satın alma fişi bulunmamaktadır.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start font-sans">
+            {/* Left Master List */}
+            <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden max-h-[700px] overflow-y-auto divide-y divide-slate-100">
+              <div className="p-4 bg-slate-50/50 border-b border-slate-100">
+                <h4 className="text-xs font-bold text-slate-700">Satın Alma Fişleri</h4>
+              </div>
+              {sortedReceipts.map((receipt) => {
+                const isSelected = receipt.id === activeReceiptId;
+                const supplierName = supplierMap[receipt.supplierId] || 'Bilinmeyen Tedarikçi';
+                return (
+                  <div
+                    key={receipt.id}
+                    onClick={() => setSelectedReceiptId(receipt.id)}
+                    className={`p-4 text-left cursor-pointer transition-all hover:bg-slate-50 ${
+                      isSelected ? 'bg-indigo-50/50 border-l-4 border-indigo-600' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-900">{formatDate(receipt.receiptDate)}</span>
+                      <span className="text-[10px] bg-slate-100 text-slate-600 font-mono px-2 py-0.5 rounded font-bold">
+                        {receipt.id.substring(0, 8).toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-xs font-bold text-slate-700 mt-1">{supplierName}</div>
+                    
+                    <div className="grid grid-cols-2 gap-2 mt-2 text-[10px] text-slate-500 font-semibold">
+                      <div>Fatura: {receipt.invoiceNumber || '-'}</div>
+                      <div>İrsaliye: {receipt.dispatchNoteNumber || '-'}</div>
+                    </div>
+                    {receipt.note && (
+                      <div className="text-[10px] text-slate-400 italic mt-1.5 truncate">
+                        {receipt.note}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Right Detail Panel */}
+            <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-100 shadow-xs p-5 space-y-4">
+              {selectedReceipt ? (
+                <>
+                  <div className="border-b border-slate-100 pb-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Satın Alma Detayları</h4>
+                      <span className="text-xs font-mono text-slate-400 font-semibold">{selectedReceipt.id}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1 font-semibold">
+                      Tedarikçi: <span className="font-bold text-slate-800">{supplierMap[selectedReceipt.supplierId] || 'Bilinmeyen Tedarikçi'}</span>
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Partiler / Lotlar ({selectedReceiptLots.length})</h5>
+                    {selectedReceiptLots.length === 0 ? (
+                      <div className="text-center py-6 text-slate-400 font-medium text-xs">
+                        Bu fişe bağlı lot kaydı bulunmuyor.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {selectedReceiptLots.map((lot) => {
+                          const rmInfo = rmMap[lot.rawMaterialId] || { name: 'Silinmiş Hammadde', unit: '' };
+                          return (
+                            <div key={lot.id} className="p-4 bg-slate-50 border border-slate-100 rounded-xl space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-slate-900">{rmInfo.name}</span>
+                                <span className="text-[11px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 py-0.5 rounded-lg">
+                                  {lot.internalLotNo}
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                                <div>
+                                  <span className="block text-[10px] text-slate-400 font-bold uppercase">Künye Türü</span>
+                                  <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold mt-1 ${
+                                    lot.kunyeStatus === 'provided'
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                                      : 'bg-amber-50 text-amber-700 border border-amber-100'
+                                  }`}>
+                                    {lot.kunyeStatus === 'provided' ? 'Gerçek Künye' : 'Dahili / Dummy Künye'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="block text-[10px] text-slate-400 font-bold uppercase">Künye No / Kodu</span>
+                                  <span className="font-mono font-bold text-slate-800">{lot.kunyeNumber || '-'}</span>
+                                </div>
+                                <div>
+                                  <span className="block text-[10px] text-slate-400 font-bold uppercase">Birim Fiyat</span>
+                                  <span className="font-bold text-slate-700">{formatCurrency(lot.unitPrice)}</span>
+                                </div>
+                                <div>
+                                  <span className="block text-[10px] text-slate-400 font-bold uppercase">Kabul Miktarı</span>
+                                  <span className="font-bold text-slate-800">{formatWeight(lot.quantityReceived, rmInfo.unit)}</span>
+                                </div>
+                                <div>
+                                  <span className="block text-[10px] text-slate-400 font-bold uppercase">Kalan Stok</span>
+                                  <span className={`font-extrabold ${lot.quantityRemaining > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                    {formatWeight(lot.quantityRemaining, rmInfo.unit)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="block text-[10px] text-slate-400 font-bold uppercase">Toplam Tutar</span>
+                                  <span className="font-bold text-slate-900">{formatCurrency(lot.quantityReceived * lot.unitPrice)}</span>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs border-t border-slate-200/60 pt-2 text-[11px] text-slate-500 font-semibold">
+                                <div>Hareket ID: <span className="font-mono">{lot.inboundStockMovementId}</span></div>
+                                {lot.note && (
+                                  <div className="italic text-slate-400">Not: {lot.note}</div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-12 text-slate-400 font-medium">
+                  Lütfen detayını görmek istediğiniz satın alma fişini seçin.
+                </div>
+              )}
+            </div>
+          </div>
+        )
       )}
 
       {/* ADD STOCK MOVEMENT MODAL */}
@@ -891,9 +1091,8 @@ export default function StockView({
                     onChange={(e) => setMovementType(e.target.value as StockMovementType)}
                     className="w-full bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
                   >
-                    <option value="Stok Girişi">Stok Girişi (Satın Alma)</option>
-                    <option value="Stok Çıkışı">Stok Çıkışı (Kullanım)</option>
-                    <option value="Fire Çıkışı">Fire Çıkışı (Zayiat)</option>
+                    <option value="Stok Çıkışı">Stok Çıkışı</option>
+                    <option value="Fire Çıkışı">Fire Çıkışı</option>
                     <option value="Sayım Düzeltmesi">Sayım Düzeltmesi</option>
                   </select>
                 </div>
@@ -1355,6 +1554,7 @@ export default function StockView({
                           quantity: '10',
                           unitPrice: activeMaterials[0]?.purchasePrice?.toString() || '0',
                           kunyeNumber: '',
+                          kunyeStatus: 'provided',
                           note: ''
                         }
                       ]);
@@ -1372,7 +1572,7 @@ export default function StockView({
 
                     return (
                       <div key={idx} className="bg-slate-50/50 p-3 rounded-xl border border-slate-100 grid grid-cols-1 md:grid-cols-12 gap-3 items-end font-sans">
-                        <div className="md:col-span-3">
+                        <div className="md:col-span-2">
                           <label className="block text-[10px] font-bold text-slate-500 mb-1">Hammadde *</label>
                           <select
                             required
@@ -1395,7 +1595,7 @@ export default function StockView({
                           </select>
                         </div>
 
-                        <div className="md:col-span-2">
+                        <div className="md:col-span-1">
                           <label className="block text-[10px] font-bold text-slate-500 mb-1">Miktar ({rmUnit || 'Birim'}) *</label>
                           <input
                             type="text"
@@ -1411,8 +1611,8 @@ export default function StockView({
                           />
                         </div>
 
-                        <div className="md:col-span-2">
-                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Birim Fiyat (TL) *</label>
+                        <div className="md:col-span-1">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Birim Fiyat *</label>
                           <input
                             type="text"
                             required
@@ -1422,27 +1622,45 @@ export default function StockView({
                               updated[idx].unitPrice = e.target.value;
                               setPurchaseLines(updated);
                             }}
-                            placeholder="TL Fiyat"
+                            placeholder="Fiyat"
                             className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
                           />
                         </div>
 
                         <div className="md:col-span-2">
-                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Künye No / Kodu</label>
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Künye Türü *</label>
+                          <select
+                            required
+                            value={line.kunyeStatus}
+                            onChange={(e) => {
+                              const updated = [...purchaseLines];
+                              updated[idx].kunyeStatus = e.target.value as 'provided' | 'internal_placeholder';
+                              setPurchaseLines(updated);
+                            }}
+                            className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
+                          >
+                            <option value="provided">Gerçek Künye</option>
+                            <option value="internal_placeholder">Dahili / Dummy</option>
+                          </select>
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">Künye No / Kodu *</label>
                           <input
                             type="text"
+                            required
                             value={line.kunyeNumber}
                             onChange={(e) => {
                               const updated = [...purchaseLines];
                               updated[idx].kunyeNumber = e.target.value;
                               setPurchaseLines(updated);
                             }}
-                            placeholder="Opsiyonel"
+                            placeholder="Künye girin"
                             className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none font-mono"
                           />
                         </div>
 
-                        <div className="md:col-span-2">
+                        <div className="md:col-span-3">
                           <label className="block text-[10px] font-bold text-slate-500 mb-1">Satır Açıklaması</label>
                           <input
                             type="text"
