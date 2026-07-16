@@ -153,72 +153,107 @@ BEGIN
       p_produced_quantity;
   END IF;
 
-  -- 7. Validate and parse lot allocations if manual selection is active
-  IF p_lot_allocations IS NOT NULL AND jsonb_array_length(p_lot_allocations) > 0 THEN
-    v_use_manual := TRUE;
+  -- 5b. Check for duplicate active recipe raw materials
+  IF EXISTS (
+    SELECT 1
+    FROM public.product_recipes pr
+    WHERE pr.product_id = v_ppi.product_id
+      AND pr.organization_id = v_org_id
+      AND pr.is_deleted = FALSE
+    GROUP BY BTRIM(pr.raw_material_id)
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'Ürünün aktif reçetesinde mükerrer hammadde tanımlanmış. Lütfen reçeteyi düzeltin.';
+  END IF;
 
+  -- 7. Validate and parse lot allocations if manual selection is active
+  IF p_lot_allocations IS NOT NULL THEN
     IF jsonb_typeof(p_lot_allocations) <> 'array' THEN
       RAISE EXCEPTION 'p_lot_allocations must be a JSON array.';
     END IF;
 
-    -- Validate that each element is an object with valid fields
-    IF EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(p_lot_allocations) elem
-      WHERE jsonb_typeof(elem) <> 'object'
-    ) THEN
-      RAISE EXCEPTION 'Her lot allocation girdisi bir JSON objesi olmalıdır.';
-    END IF;
+    IF jsonb_array_length(p_lot_allocations) > 0 THEN
+      v_use_manual := TRUE;
 
-    IF EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(p_lot_allocations) elem
-      WHERE elem->>'rawMaterialId' IS NULL 
-         OR TRIM(elem->>'rawMaterialId') = ''
-         OR elem->>'rawMaterialLotId' IS NULL 
-         OR TRIM(elem->>'rawMaterialLotId') = ''
-         OR elem->>'quantity' IS NULL
-         OR (elem->>'quantity')::NUMERIC <= 0
-    ) THEN
-      RAISE EXCEPTION 'Lot allocation girdileri geçerli rawMaterialId, rawMaterialLotId ve sıfırdan büyük quantity içermelidir.';
-    END IF;
+      -- Validate each element in array safely
+      DECLARE
+        v_elem JSONB;
+        v_elem_rm_id TEXT;
+        v_elem_lot_id TEXT;
+        v_elem_qty_text TEXT;
+        v_elem_qty NUMERIC;
+      BEGIN
+        FOR v_elem IN SELECT * FROM jsonb_array_elements(p_lot_allocations) LOOP
+          IF jsonb_typeof(v_elem) <> 'object' THEN
+            RAISE EXCEPTION 'Her lot allocation girdisi bir JSON objesi olmalıdır.';
+          END IF;
 
-    -- Check for duplicate rawMaterialId + rawMaterialLotId
-    IF EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(p_lot_allocations) elem
-      GROUP BY elem->>'rawMaterialId', elem->>'rawMaterialLotId'
-      HAVING COUNT(*) > 1
-    ) THEN
-      RAISE EXCEPTION 'Aynı hammadde ve lot çifti birden fazla kez gönderilemez.';
-    END IF;
+          v_elem_rm_id := BTRIM(v_elem->>'rawMaterialId');
+          v_elem_lot_id := BTRIM(v_elem->>'rawMaterialLotId');
+          v_elem_qty_text := v_elem->>'quantity';
 
-    -- Check if any raw material in input is NOT in product's active recipe
-    SELECT COUNT(*)
-    INTO v_invalid_rm_count
-    FROM (
-      SELECT DISTINCT elem->>'rawMaterialId' AS rm_id
-      FROM jsonb_array_elements(p_lot_allocations) elem
-    ) p
-    LEFT JOIN public.product_recipes pr ON pr.raw_material_id = p.rm_id
-      AND pr.product_id = v_ppi.product_id
-      AND pr.organization_id = v_org_id
-      AND pr.is_deleted = FALSE
-    WHERE pr.raw_material_id IS NULL;
+          IF v_elem_rm_id IS NULL OR v_elem_rm_id = '' THEN
+            RAISE EXCEPTION 'rawMaterialId boş olamaz.';
+          END IF;
 
-    IF v_invalid_rm_count > 0 THEN
-      RAISE EXCEPTION 'Reçetede bulunmayan hammadde lot allocation girdisi tespit edildi.';
+          IF v_elem_lot_id IS NULL OR v_elem_lot_id = '' THEN
+            RAISE EXCEPTION 'rawMaterialLotId boş olamaz.';
+          END IF;
+
+          IF v_elem_qty_text IS NULL OR TRIM(v_elem_qty_text) = '' THEN
+            RAISE EXCEPTION 'quantity boş olamaz.';
+          END IF;
+
+          -- Safe numeric cast check
+          BEGIN
+            v_elem_qty := v_elem_qty_text::NUMERIC;
+          EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'Geçersiz miktar değeri: %. Sayısal bir değer girilmelidir.', v_elem_qty_text;
+          END;
+
+          IF v_elem_qty <= 0 THEN
+            RAISE EXCEPTION 'Lot allocation girdisinde quantity sıfırdan büyük olmalıdır.';
+          END IF;
+        END LOOP;
+      END;
+
+      -- Check for duplicate rawMaterialId + rawMaterialLotId
+      IF EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(p_lot_allocations) elem
+        GROUP BY BTRIM(elem->>'rawMaterialId'), BTRIM(elem->>'rawMaterialLotId')
+        HAVING COUNT(*) > 1
+      ) THEN
+        RAISE EXCEPTION 'Aynı hammadde ve lot çifti birden fazla kez gönderilemez.';
+      END IF;
+
+      -- Check if any raw material in input is NOT in product's active recipe
+      SELECT COUNT(*)
+      INTO v_invalid_rm_count
+      FROM (
+        SELECT DISTINCT BTRIM(elem->>'rawMaterialId') AS rm_id
+        FROM jsonb_array_elements(p_lot_allocations) elem
+      ) p
+      LEFT JOIN public.product_recipes pr ON BTRIM(pr.raw_material_id) = p.rm_id
+        AND pr.product_id = v_ppi.product_id
+        AND pr.organization_id = v_org_id
+        AND pr.is_deleted = FALSE
+      WHERE pr.raw_material_id IS NULL;
+
+      IF v_invalid_rm_count > 0 THEN
+        RAISE EXCEPTION 'Reçetede bulunmayan hammadde lot allocation girdisi tespit edildi.';
+      END IF;
     END IF;
   END IF;
 
   -- 8. Advisory locking of recipe raw materials in deterministic ascending order of ID
   FOR v_rm_id IN
-    SELECT DISTINCT pr.raw_material_id
+    SELECT DISTINCT BTRIM(pr.raw_material_id)
     FROM public.product_recipes pr
     WHERE pr.product_id = v_ppi.product_id
       AND pr.organization_id = v_org_id
       AND pr.is_deleted = FALSE
-    ORDER BY pr.raw_material_id ASC
+    ORDER BY BTRIM(pr.raw_material_id) ASC
   LOOP
     PERFORM pg_advisory_xact_lock(
       hashtextextended(
@@ -319,7 +354,7 @@ BEGIN
   -- 9. Iterate recipe requirements & allocate raw material lots
   FOR v_recipe IN
     SELECT
-      pr.raw_material_id,
+      BTRIM(pr.raw_material_id) AS raw_material_id,
       pr.quantity AS recipe_quantity,
       pr.unit AS recipe_unit,
       COALESCE(pr.waste_rate_override, rm.default_waste_rate, 0) AS waste_rate,
@@ -328,7 +363,7 @@ BEGIN
       rm.purchase_price,
       rm.name AS raw_material_name
     FROM public.product_recipes pr
-    JOIN public.raw_materials rm ON rm.id = pr.raw_material_id
+    JOIN public.raw_materials rm ON BTRIM(rm.id) = BTRIM(pr.raw_material_id)
     WHERE pr.product_id = v_ppi.product_id
       AND pr.organization_id = v_org_id
       AND pr.is_deleted = FALSE
@@ -397,11 +432,44 @@ BEGIN
 
     -- Lot allocations
     IF v_use_manual THEN
+      -- Validate that all sent lots for this raw material exist and are valid/compatible (Point 4)
+      DECLARE
+        v_sent_lot_count INT;
+        v_matched_lot_count INT;
+      BEGIN
+        SELECT COUNT(DISTINCT BTRIM(elem->>'rawMaterialLotId'))
+        INTO v_sent_lot_count
+        FROM jsonb_array_elements(p_lot_allocations) elem
+        WHERE BTRIM(elem->>'rawMaterialId') = BTRIM(v_recipe.raw_material_id);
+
+        IF v_sent_lot_count > 0 THEN
+          SELECT COUNT(*)
+          INTO v_matched_lot_count
+          FROM public.raw_material_lots rml
+          JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
+          WHERE BTRIM(rml.id) IN (
+            SELECT DISTINCT BTRIM(elem->>'rawMaterialLotId')
+            FROM jsonb_array_elements(p_lot_allocations) elem
+            WHERE BTRIM(elem->>'rawMaterialId') = BTRIM(v_recipe.raw_material_id)
+          )
+            AND rml.organization_id = v_org_id
+            AND BTRIM(rml.raw_material_id) = BTRIM(v_recipe.raw_material_id)
+            AND rml.is_deleted = FALSE
+            AND rmr.organization_id = v_org_id
+            AND rmr.is_deleted = FALSE
+            AND LOWER(BTRIM(rml.unit)) = LOWER(BTRIM(v_recipe.raw_unit));
+
+          IF v_matched_lot_count <> v_sent_lot_count THEN
+            RAISE EXCEPTION 'Seçilen lotlardan biri bulunamadı veya organizasyon, hammadde ya da birim ile uyuşmuyor.';
+          END IF;
+        END IF;
+      END;
+
       -- Manual Selection Mode
       SELECT COALESCE(SUM((elem->>'quantity')::NUMERIC), 0)
       INTO v_manual_allocated_sum
       FROM jsonb_array_elements(p_lot_allocations) elem
-      WHERE elem->>'rawMaterialId' = v_recipe.raw_material_id;
+      WHERE BTRIM(elem->>'rawMaterialId') = BTRIM(v_recipe.raw_material_id);
 
       IF ABS(v_manual_allocated_sum - v_gross_qty) > 0.000000001 THEN
         RAISE EXCEPTION 'Manuel lot miktar toplamı reçete brüt ihtiyacı ile eşleşmiyor. Hammadde: %, Gereken: %, Manuel Toplam: %',
@@ -422,16 +490,17 @@ BEGIN
         JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
         JOIN (
           SELECT 
-            (elem->>'rawMaterialLotId') AS lot_id,
+            BTRIM(elem->>'rawMaterialLotId') AS lot_id,
             (elem->>'quantity')::NUMERIC AS qty
           FROM jsonb_array_elements(p_lot_allocations) AS elem
-          WHERE (elem->>'rawMaterialId') = v_recipe.raw_material_id
-        ) m ON m.lot_id = rml.id
-        WHERE rml.raw_material_id = v_recipe.raw_material_id
+          WHERE BTRIM(elem->>'rawMaterialId') = BTRIM(v_recipe.raw_material_id)
+        ) m ON m.lot_id = BTRIM(rml.id)
+        WHERE BTRIM(rml.raw_material_id) = BTRIM(v_recipe.raw_material_id)
           AND rml.organization_id = v_org_id
           AND rml.is_deleted = FALSE
           AND rmr.organization_id = v_org_id
           AND rmr.is_deleted = FALSE
+          AND LOWER(BTRIM(rml.unit)) = LOWER(BTRIM(v_recipe.raw_unit))
         ORDER BY 
           rmr.receipt_date ASC,
           rml.created_at ASC,
@@ -440,12 +509,17 @@ BEGIN
       LOOP
         -- Check lot limits
         IF r_lot.quantity_remaining < r_lot.manual_qty THEN
-          SELECT COALESCE(SUM(quantity_remaining), 0)
+          SELECT COALESCE(SUM(rml.quantity_remaining), 0)
           INTO v_total_available_lot_qty
-          FROM public.raw_material_lots
-          WHERE raw_material_id = v_recipe.raw_material_id
-            AND organization_id = v_org_id
-            AND is_deleted = FALSE;
+          FROM public.raw_material_lots rml
+          JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
+          WHERE BTRIM(rml.raw_material_id) = BTRIM(v_recipe.raw_material_id)
+            AND rml.organization_id = v_org_id
+            AND rml.is_deleted = FALSE
+            AND rml.quantity_remaining > 0
+            AND rmr.organization_id = v_org_id
+            AND rmr.is_deleted = FALSE
+            AND LOWER(BTRIM(rml.unit)) = LOWER(BTRIM(v_recipe.raw_unit));
 
           RAISE EXCEPTION 'Yeterli hammadde lot stoku bulunamadı. Hammadde: %, Gereken: %, Mevcut: %',
             v_recipe.raw_material_name, v_gross_qty, v_total_available_lot_qty;
@@ -528,12 +602,17 @@ BEGIN
 
       -- Check if we successfully fulfilled the amount
       IF ABS(v_loop_processed_sum - v_gross_qty) > 0.000000001 THEN
-        SELECT COALESCE(SUM(quantity_remaining), 0)
+        SELECT COALESCE(SUM(rml.quantity_remaining), 0)
         INTO v_total_available_lot_qty
-        FROM public.raw_material_lots
-        WHERE raw_material_id = v_recipe.raw_material_id
-          AND organization_id = v_org_id
-          AND is_deleted = FALSE;
+        FROM public.raw_material_lots rml
+        JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
+        WHERE BTRIM(rml.raw_material_id) = BTRIM(v_recipe.raw_material_id)
+          AND rml.organization_id = v_org_id
+          AND rml.is_deleted = FALSE
+          AND rml.quantity_remaining > 0
+          AND rmr.organization_id = v_org_id
+          AND rmr.is_deleted = FALSE
+          AND LOWER(BTRIM(rml.unit)) = LOWER(BTRIM(v_recipe.raw_unit));
 
         RAISE EXCEPTION 'Yeterli hammadde lot stoku bulunamadı. Hammadde: %, Gereken: %, Mevcut: %',
           v_recipe.raw_material_name, v_gross_qty, v_total_available_lot_qty;
@@ -547,12 +626,13 @@ BEGIN
       INTO v_total_available_lot_qty
       FROM public.raw_material_lots rml
       JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
-      WHERE rml.raw_material_id = v_recipe.raw_material_id
+      WHERE BTRIM(rml.raw_material_id) = BTRIM(v_recipe.raw_material_id)
         AND rml.organization_id = v_org_id
         AND rml.is_deleted = FALSE
         AND rml.quantity_remaining > 0
         AND rmr.organization_id = v_org_id
-        AND rmr.is_deleted = FALSE;
+        AND rmr.is_deleted = FALSE
+        AND LOWER(BTRIM(rml.unit)) = LOWER(BTRIM(v_recipe.raw_unit));
 
       IF v_total_available_lot_qty < v_gross_qty THEN
         RAISE EXCEPTION 'Yeterli hammadde lot stoku bulunamadı. Hammadde: %, Gereken: %, Mevcut: %',
@@ -568,12 +648,13 @@ BEGIN
           rml.kunye_status
         FROM public.raw_material_lots rml
         JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
-        WHERE rml.raw_material_id = v_recipe.raw_material_id
+        WHERE BTRIM(rml.raw_material_id) = BTRIM(v_recipe.raw_material_id)
           AND rml.organization_id = v_org_id
           AND rml.is_deleted = FALSE
           AND rml.quantity_remaining > 0
           AND rmr.organization_id = v_org_id
           AND rmr.is_deleted = FALSE
+          AND LOWER(BTRIM(rml.unit)) = LOWER(BTRIM(v_recipe.raw_unit))
         ORDER BY 
           rmr.receipt_date ASC,
           rml.created_at ASC,
@@ -661,6 +742,18 @@ BEGIN
       END LOOP;
 
       IF v_remaining_needed > 0 THEN
+        SELECT COALESCE(SUM(rml.quantity_remaining), 0)
+        INTO v_total_available_lot_qty
+        FROM public.raw_material_lots rml
+        JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
+        WHERE BTRIM(rml.raw_material_id) = BTRIM(v_recipe.raw_material_id)
+          AND rml.organization_id = v_org_id
+          AND rml.is_deleted = FALSE
+          AND rml.quantity_remaining > 0
+          AND rmr.organization_id = v_org_id
+          AND rmr.is_deleted = FALSE
+          AND LOWER(BTRIM(rml.unit)) = LOWER(BTRIM(v_recipe.raw_unit));
+
         RAISE EXCEPTION 'Yeterli hammadde lot stoku bulunamadı. Hammadde: %, Gereken: %, Mevcut: %',
           v_recipe.raw_material_name, v_gross_qty, v_total_available_lot_qty;
       END IF;
@@ -1010,14 +1103,80 @@ BEGIN
     RAISE EXCEPTION 'Bu üretime ait aktif lot tahsis (allocation) kaydı bulunamadı.';
   END IF;
 
+  -- 3b. Verify allocation and stock movement integrity (Point 7)
+  DECLARE
+    v_sm_item RECORD;
+    v_sum_allocated NUMERIC;
+    v_mismatch_count INT;
+  BEGIN
+    -- Check 1 & 2: Loop through each active "Üretim Tüketimi" stock movement for this production run
+    FOR v_sm_item IN
+      SELECT *
+      FROM public.stock_movements
+      WHERE production_run_id = v_run.id
+        AND organization_id = v_org_id
+        AND is_deleted = FALSE
+        AND movement_type = 'Üretim Tüketimi'
+    LOOP
+      -- Calculate sum of quantity_consumed for active allocations pointing to this stock movement
+      SELECT COALESCE(SUM(quantity_consumed), 0)
+      INTO v_sum_allocated
+      FROM public.production_run_raw_material_lot_allocations
+      WHERE stock_movement_id = v_sm_item.id
+        AND organization_id = v_org_id
+        AND is_reversed = FALSE;
+
+      IF ABS(v_sum_allocated - v_sm_item.quantity) > 0.000000001 THEN
+        RAISE EXCEPTION 'Bütünlük hatası: Stok hareketi miktarı ile lot allocation miktarları eşleşmiyor.';
+      END IF;
+
+      -- Check if any associated active allocation has mismatched raw_material_id or unit
+      SELECT COUNT(*)
+      INTO v_mismatch_count
+      FROM public.production_run_raw_material_lot_allocations alloc
+      WHERE alloc.stock_movement_id = v_sm_item.id
+        AND alloc.organization_id = v_org_id
+        AND alloc.is_reversed = FALSE
+        AND (
+          BTRIM(alloc.raw_material_id) <> BTRIM(v_sm_item.raw_material_id)
+          OR LOWER(BTRIM(alloc.unit)) <> LOWER(BTRIM(v_sm_item.unit))
+        );
+
+      IF v_mismatch_count > 0 THEN
+        RAISE EXCEPTION 'Bütünlük hatası: Lot allocation hammadde veya birim bilgisi stok hareketiyle uyuşmuyor.';
+      END IF;
+    END LOOP;
+
+    -- Check 3: Ensure all active allocations for this run point to an active 'Üretim Tüketimi' stock movement of this run
+    SELECT COUNT(*)
+    INTO v_mismatch_count
+    FROM public.production_run_raw_material_lot_allocations alloc
+    WHERE alloc.production_run_id = v_run.id
+      AND alloc.organization_id = v_org_id
+      AND alloc.is_reversed = FALSE
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.stock_movements sm
+        WHERE sm.id = alloc.stock_movement_id
+          AND sm.production_run_id = v_run.id
+          AND sm.organization_id = v_org_id
+          AND sm.is_deleted = FALSE
+          AND sm.movement_type = 'Üretim Tüketimi'
+      );
+
+    IF v_mismatch_count > 0 THEN
+      RAISE EXCEPTION 'Bütünlük hatası: Geçersiz veya kayıp stok hareketi referansına sahip lot allocation kaydı tespit edildi.';
+    END IF;
+  END;
+
   -- 4. Advisory lock on allocation raw materials in ascending order of raw_material_id
   FOR v_rm_id IN
-    SELECT DISTINCT raw_material_id
+    SELECT DISTINCT BTRIM(raw_material_id)
     FROM public.production_run_raw_material_lot_allocations
     WHERE production_run_id = v_run.id
       AND organization_id = v_org_id
       AND is_reversed = FALSE
-    ORDER BY raw_material_id ASC
+    ORDER BY BTRIM(raw_material_id) ASC
   LOOP
     PERFORM pg_advisory_xact_lock(
       hashtextextended(
@@ -1028,6 +1187,8 @@ BEGIN
   END LOOP;
 
   -- 5. Lock and update lot rows in deterministic order to restore quantities
+  v_processed_alloc_count := 0;
+
   FOR r_alloc IN
     SELECT 
       alloc.id AS alloc_id,
@@ -1037,7 +1198,7 @@ BEGIN
       rml.quantity_received,
       rml.internal_lot_no
     FROM public.production_run_raw_material_lot_allocations alloc
-    JOIN public.raw_material_lots rml ON rml.id = alloc.raw_material_lot_id
+    JOIN public.raw_material_lots rml ON BTRIM(rml.id) = BTRIM(alloc.raw_material_lot_id)
     JOIN public.raw_material_receipts rmr ON rmr.id = rml.raw_material_receipt_id
     WHERE alloc.production_run_id = v_run.id
       AND alloc.organization_id = v_org_id
@@ -1050,6 +1211,8 @@ BEGIN
       rml.id ASC
     FOR UPDATE OF rml
   LOOP
+    v_processed_alloc_count := v_processed_alloc_count + 1;
+
     -- Ensure received capacity limits are not violated
     IF r_alloc.quantity_remaining + r_alloc.quantity_consumed > r_alloc.quantity_received THEN
       RAISE EXCEPTION 'Lot miktarı geri yüklenemedi. Lot limitleri aşılıyor. Lot: %, Mevcut Kalan: %, Geri Yüklenen: %, Giriş Miktarı: %',
@@ -1062,7 +1225,12 @@ BEGIN
       quantity_remaining = quantity_remaining + r_alloc.quantity_consumed,
       updated_at = NOW()
     WHERE id = r_alloc.raw_material_lot_id
-      AND organization_id = v_org_id;
+      AND organization_id = v_org_id
+      AND (quantity_remaining + r_alloc.quantity_consumed <= quantity_received);
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Lot miktarı geri yüklenemedi. Lot limitleri aşılıyor veya satır bulunamadı. Lot ID: %', r_alloc.raw_material_lot_id;
+    END IF;
 
     v_reversed_allocations_json := v_reversed_allocations_json || JSONB_BUILD_ARRAY(
       JSONB_BUILD_OBJECT(
@@ -1073,6 +1241,12 @@ BEGIN
       )
     );
   END LOOP;
+
+  -- Verify processed count
+  IF v_processed_alloc_count <> v_alloc_count THEN
+    RAISE EXCEPTION 'Geri yüklenecek lot tahsis kayıt sayısı uyuşmuyor. Beklenen: %, İşlenen: %',
+      v_alloc_count, v_processed_alloc_count;
+  END IF;
 
   -- 6. Mark allocations as reversed (do not delete)
   UPDATE public.production_run_raw_material_lot_allocations
