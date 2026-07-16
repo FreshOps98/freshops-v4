@@ -205,6 +205,10 @@ BEGIN
           END IF;
 
           -- Safe numeric cast check
+          IF LOWER(BTRIM(v_elem_qty_text)) IN ('nan', 'infinity', '-infinity', '+infinity') THEN
+            RAISE EXCEPTION 'Geçersiz miktar değeri: %. Sayısal bir değer girilmelidir.', v_elem_qty_text;
+          END IF;
+
           BEGIN
             v_elem_qty := v_elem_qty_text::NUMERIC;
           EXCEPTION WHEN OTHERS THEN
@@ -985,6 +989,7 @@ DECLARE
 
   -- Reversal details
   v_alloc_count INTEGER;
+  v_processed_alloc_count INTEGER := 0;
   v_rm_id TEXT;
   r_alloc RECORD;
   v_reversed_allocations_json JSONB := '[]'::JSONB;
