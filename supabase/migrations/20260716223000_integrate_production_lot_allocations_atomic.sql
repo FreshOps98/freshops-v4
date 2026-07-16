@@ -1161,12 +1161,12 @@ BEGIN
       AND alloc.is_reversed = FALSE
       AND NOT EXISTS (
         SELECT 1
-        FROM public.stock_movements sm
-        WHERE sm.id = alloc.stock_movement_id
-          AND sm.production_run_id = v_run.id
-          AND sm.organization_id = v_org_id
-          AND sm.is_deleted = FALSE
-          AND sm.movement_type = 'Üretim Tüketimi'
+        FROM public.stock_movements sm_check
+        WHERE sm_check.id = alloc.stock_movement_id
+          AND sm_check.production_run_id = v_run.id
+          AND sm_check.organization_id = v_org_id
+          AND sm_check.is_deleted = FALSE
+          AND sm_check.movement_type = 'Üretim Tüketimi'
       );
 
     IF v_mismatch_count > 0 THEN
