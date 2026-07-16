@@ -566,7 +566,7 @@ export default function StockView({
         <div className="flex gap-2">
           <button
             onClick={handleOpenPurchaseModal}
-            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer border border-indigo-700/20 animate-pulse hover:animate-none"
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer border border-indigo-700/20"
           >
             <Plus size={16} />
             Satın Alma Girişi
