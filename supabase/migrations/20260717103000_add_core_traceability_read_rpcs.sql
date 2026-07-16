@@ -14,6 +14,7 @@ AS $$
 DECLARE
   v_org_id UUID;
   v_run_id TEXT;
+  v_finished_goods_stock_id TEXT;
   v_run_json JSONB;
   v_fgs_json JSONB;
   v_order_json JSONB;
@@ -27,10 +28,15 @@ BEGIN
   END IF;
 
   -- Verify production run existence and ownership (is_deleted can be true/false for history)
-  SELECT id
-  INTO v_run_id
-  FROM public.production_runs
-  WHERE id = p_production_run_id AND organization_id = v_org_id;
+  SELECT
+    pr.id,
+    pr.finished_goods_stock_id
+  INTO
+    v_run_id,
+    v_finished_goods_stock_id
+  FROM public.production_runs pr
+  WHERE pr.id = p_production_run_id
+    AND pr.organization_id = v_org_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Üretim kaydı bulunamadı veya bu işleme yetkiniz yok.';
@@ -39,7 +45,7 @@ BEGIN
   -- Build productionRun object
   SELECT jsonb_build_object(
     'id', pr.id,
-    'status', NULL, -- production_runs table does not have a status column
+    'status', pr.status,
     'producedQuantity', pr.produced_quantity,
     'productionPlanId', pr.production_plan_id,
     'productionPlanItemId', pr.production_plan_item_id,
@@ -70,7 +76,26 @@ BEGIN
   )
   INTO v_fgs_json
   FROM public.finished_goods_stocks fgs
-  WHERE fgs.production_run_id = p_production_run_id AND fgs.organization_id = v_org_id;
+  WHERE fgs.organization_id = v_org_id
+    AND (
+      (
+        v_finished_goods_stock_id IS NOT NULL
+        AND fgs.id = v_finished_goods_stock_id
+      )
+      OR
+      (
+        v_finished_goods_stock_id IS NULL
+        AND fgs.production_run_id = p_production_run_id
+      )
+    )
+  ORDER BY
+    CASE
+      WHEN fgs.id = v_finished_goods_stock_id THEN 0
+      ELSE 1
+    END,
+    fgs.created_at DESC,
+    fgs.id DESC
+  LIMIT 1;
 
   IF NOT FOUND THEN
     v_fgs_json := NULL;
