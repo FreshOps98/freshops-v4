@@ -512,7 +512,7 @@ export interface OrderTraceabilityOrderItem {
   id: string;
   orderId: string;
   productId: string;
-  productName: string;
+  productName: string | null;
   orderedQuantity: number;
   unitSalePrice: number;
   isDeleted: boolean;

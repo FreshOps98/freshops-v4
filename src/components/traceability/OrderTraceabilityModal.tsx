@@ -9,9 +9,7 @@ import {
   CheckCircle2, 
   Info, 
   RefreshCw, 
-  FileText, 
   Truck, 
-  History, 
   DollarSign,
   Package
 } from 'lucide-react';
@@ -40,12 +38,32 @@ export function OrderTraceabilityModal({
 
   if (!isOpen) return null;
 
+  const handleClose = () => {
+    setSelectedRunData(null);
+    onClose();
+  };
+
+  const getStatusColorClass = (status: string | null) => {
+    if (!status) return 'bg-amber-50 text-amber-700 border-amber-100';
+    const s = status.trim();
+    if (s === 'Tamamlandı' || s === 'Sevk Edildi') {
+      return 'bg-emerald-50 text-emerald-700 border-emerald-100';
+    }
+    if (s === 'Kısmi Sevk' || s === 'Kısmi Sevk Edildi') {
+      return 'bg-blue-50 text-blue-700 border-blue-100';
+    }
+    if (s === 'İptal') {
+      return 'bg-rose-50 text-rose-700 border-rose-100';
+    }
+    return 'bg-amber-50 text-amber-700 border-amber-100';
+  };
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto" id="order-traceability-modal">
       {/* Backdrop */}
       <div 
         className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
+        onClick={handleClose}
       />
 
       {/* Modal Container */}
@@ -64,7 +82,7 @@ export function OrderTraceabilityModal({
               </div>
             </div>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
             >
               <X className="h-5 w-5" />
@@ -147,15 +165,7 @@ export function OrderTraceabilityModal({
                   <div className="md:col-span-4 border-t border-slate-50 pt-3 flex flex-wrap gap-2 items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-slate-500 font-medium">Sipariş Durumu:</span>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                        data.order.computedStatus === 'Tamamlandı'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                          : data.order.computedStatus === 'Kısmi Sevk Edildi'
-                          ? 'bg-blue-50 text-blue-700 border-blue-100'
-                          : data.order.computedStatus === 'İptal'
-                          ? 'bg-rose-50 text-rose-700 border-rose-100'
-                          : 'bg-amber-50 text-amber-700 border-amber-100'
-                      }`}>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getStatusColorClass(data.order.computedStatus || data.order.status)}`}>
                         {data.order.computedStatus || data.order.status}
                       </span>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
@@ -197,7 +207,7 @@ export function OrderTraceabilityModal({
                           {data.orderItems.map((item) => (
                             <tr key={item.id} className={`hover:bg-slate-50/50 ${item.isDeleted ? 'bg-rose-50/20' : ''}`}>
                               <td className="py-3 px-4 font-semibold text-slate-900">
-                                {item.productName}
+                                {item.productName || 'Ürün kaydı bulunamadı'}
                               </td>
                               <td className="py-3 px-4 text-right font-black text-slate-800">
                                 {item.orderedQuantity.toLocaleString('tr-TR')} Adet
@@ -355,57 +365,67 @@ export function OrderTraceabilityModal({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
-                          {data.shipmentMovements.map((mov) => (
-                            <tr key={mov.id} className={`hover:bg-slate-50/30 ${mov.isDeleted ? 'bg-rose-50/20 text-slate-500' : ''}`}>
-                              <td className="py-3 px-4 font-medium text-slate-600">
-                                {formatDate(mov.movementDate)}
-                              </td>
-                              <td className="py-3 px-4 font-semibold text-slate-900">
-                                {mov.productName || '-'}
-                              </td>
-                              <td className="py-3 px-4 text-center font-mono font-bold text-slate-700">
-                                {mov.finishedGoodsLotNo || '-'}
-                              </td>
-                              <td className="py-3 px-4">
-                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                                  mov.movementType === 'Sevkiyat' || mov.isShipment
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-indigo-50 text-indigo-700'
-                                }`}>
-                                  {mov.movementType}
-                                </span>
-                              </td>
-                              <td className="py-3 px-4 text-right font-black text-slate-800">
-                                {mov.quantity.toLocaleString('tr-TR')} {mov.unit}
-                              </td>
-                              <td className="py-3 px-4 text-right text-slate-500 font-medium">
-                                {mov.previousQuantity != null && mov.newQuantity != null ? (
-                                  <span>{mov.previousQuantity} → {mov.newQuantity}</span>
-                                ) : '-'}
-                              </td>
-                              <td className="py-3 px-4 max-w-[180px] truncate" title={mov.note || ''}>
-                                {mov.note || '-'}
-                              </td>
-                              <td className="py-3 px-4 text-center">
-                                {mov.isDeleted ? (
+                          {data.shipmentMovements.map((mov) => {
+                            const isMovementDeleted = mov.isDeleted;
+                            const isGeriAlma = mov.movementType.toLowerCase() === 'sevkiyat geri alma';
+
+                            let statusLabel = 'Aktif';
+                            let statusStyle = 'bg-emerald-50 text-emerald-700 border-emerald-100';
+
+                            if (isMovementDeleted) {
+                              statusLabel = 'Geri Alındı / İptal';
+                              statusStyle = 'bg-rose-100 text-rose-800 border-rose-200';
+                            } else if (isGeriAlma) {
+                              statusLabel = 'Geri Alma Kaydı';
+                              statusStyle = 'bg-amber-50 text-amber-700 border-amber-100';
+                            }
+
+                            return (
+                              <tr key={mov.id} className={`hover:bg-slate-50/30 ${isMovementDeleted ? 'bg-rose-50/20 text-slate-500' : ''}`}>
+                                <td className="py-3 px-4 font-medium text-slate-600">
+                                  {formatDate(mov.movementDate)}
+                                </td>
+                                <td className="py-3 px-4 font-semibold text-slate-900">
+                                  {mov.productName || 'Ürün kaydı bulunamadı'}
+                                </td>
+                                <td className="py-3 px-4 text-center font-mono font-bold text-slate-700">
+                                  {mov.finishedGoodsLotNo || '-'}
+                                </td>
+                                <td className="py-3 px-4">
+                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                    mov.movementType === 'Sevkiyat' || mov.isShipment
+                                      ? 'bg-emerald-50 text-emerald-700'
+                                      : 'bg-indigo-50 text-indigo-700'
+                                  }`}>
+                                    {mov.movementType}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 text-right font-black text-slate-800">
+                                  {mov.quantity.toLocaleString('tr-TR')} {mov.unit}
+                                </td>
+                                <td className="py-3 px-4 text-right text-slate-500 font-medium">
+                                  {mov.previousQuantity != null && mov.newQuantity != null ? (
+                                    <span>{mov.previousQuantity} → {mov.newQuantity}</span>
+                                  ) : '-'}
+                                </td>
+                                <td className="py-3 px-4 max-w-[180px] truncate" title={mov.note || ''}>
+                                  {mov.note || '-'}
+                                </td>
+                                <td className="py-3 px-4 text-center">
                                   <div className="inline-flex flex-col items-center">
-                                    <span className="text-[9px] bg-rose-100 text-rose-800 font-bold border border-rose-200 rounded px-1.5 py-0.5">
-                                      Geri Alındı / İptal
+                                    <span className={`text-[9px] font-bold border rounded px-1.5 py-0.5 ${statusStyle}`}>
+                                      {statusLabel}
                                     </span>
-                                    {mov.deletedReason && (
+                                    {isMovementDeleted && mov.deletedReason && (
                                       <span className="text-[8px] text-rose-600 block mt-0.5 italic max-w-[100px] truncate" title={mov.deletedReason}>
                                         {mov.deletedReason}
                                       </span>
                                     )}
                                   </div>
-                                ) : (
-                                  <span className="text-[9px] bg-emerald-50 text-emerald-700 font-bold border border-emerald-100 rounded px-1.5 py-0.5">
-                                    Tamamlandı
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
+                                </td>
+                              </tr>
+                            );
+                          })}
                           {data.shipmentMovements.length === 0 && (
                             <tr>
                               <td colSpan={8} className="py-6 text-center text-slate-400 font-medium">
@@ -427,7 +447,7 @@ export function OrderTraceabilityModal({
           {/* Footer */}
           <div className="border-t border-slate-100 px-6 py-3.5 bg-slate-50 text-right shrink-0">
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer"
             >
               Kapat
