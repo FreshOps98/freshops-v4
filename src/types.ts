@@ -488,5 +488,69 @@ export interface ProductionTraceabilityResponse {
   allocations: ProductionTraceabilityAllocation[];
 }
 
+export interface OrderTraceabilityOrder {
+  id: string;
+  customerId: string | null;
+  orderNumber: string;
+  orderDate: string;
+  deliveryDate: string;
+  status: string;
+  computedStatus: string;
+  approvalStatus: string;
+  totalAmount: number;
+  realizedAmount: number;
+  note: string | null;
+  isDeleted: boolean;
+}
+
+export interface OrderTraceabilityCustomer {
+  id: string;
+  name: string;
+}
+
+export interface OrderTraceabilityOrderItem {
+  id: string;
+  orderId: string;
+  productId: string;
+  productName: string;
+  orderedQuantity: number;
+  unitSalePrice: number;
+  isDeleted: boolean;
+}
+
+export interface OrderTraceabilityShipmentMovement {
+  id: string;
+  finishedGoodsStockId: string | null;
+  productionRunId: string | null;
+  orderId: string | null;
+  orderItemId: string | null;
+  productId: string | null;
+  productName: string | null;
+  finishedGoodsLotNo: string | null;
+  movementType: string;
+  quantity: number;
+  unit: string;
+  movementDate: string;
+  previousQuantity: number | null;
+  newQuantity: number | null;
+  difference: number | null;
+  isShipment: boolean;
+  isDeleted: boolean;
+  deletedAt: string | null;
+  deletedReason: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface OrderTraceabilityResponse {
+  success: boolean;
+  order: OrderTraceabilityOrder;
+  customer: OrderTraceabilityCustomer | null;
+  orderItems: OrderTraceabilityOrderItem[];
+  productionRuns: ProductionTraceabilityResponse[];
+  shipmentMovements: OrderTraceabilityShipmentMovement[];
+}
+
+
 
 

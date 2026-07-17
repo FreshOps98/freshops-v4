@@ -54,7 +54,10 @@ import {
 } from '../../services/calcService';
 import { formatCurrency, formatWeight, formatDate, formatShortDate } from '../../utils/format';
 import { getTodayISO, getTomorrowISO } from '../../utils/dateHelper';
-import { Plus, Search, Eye, Edit2, Trash2, X, AlertTriangle, Calculator, DollarSign, CheckCircle2, Sliders, ShoppingBag } from 'lucide-react';
+import { Plus, Search, Eye, Edit2, Trash2, X, AlertTriangle, Calculator, DollarSign, CheckCircle2, Sliders, ShoppingBag, Activity } from 'lucide-react';
+import { supabaseDataService } from '../../services/supabaseDataService';
+import { OrderTraceabilityModal } from '../traceability/OrderTraceabilityModal';
+import { OrderTraceabilityResponse } from '../../types';
 
 function renderStatusBadge(status: string) {
   const colors: Record<string, string> = {
@@ -283,6 +286,55 @@ export default function OrdersView({
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+
+  // Traceability Modal states
+  const [isTraceabilityModalOpen, setIsTraceabilityModalOpen] = useState(false);
+  const [isTraceabilityLoading, setIsTraceabilityLoading] = useState(false);
+  const [traceabilityError, setTraceabilityError] = useState<string | null>(null);
+  const [traceabilityData, setTraceabilityData] = useState<OrderTraceabilityResponse | null>(null);
+  const [traceabilityActiveId, setTraceabilityActiveId] = useState<string | null>(null);
+  const traceabilityRequestCounterRef = React.useRef(0);
+
+  React.useEffect(() => {
+    return () => {
+      traceabilityRequestCounterRef.current += 1;
+    };
+  }, []);
+
+  const handleOpenOrderTraceability = async (orderId: string) => {
+    traceabilityRequestCounterRef.current += 1;
+    const currentRequestToken = traceabilityRequestCounterRef.current;
+
+    // Clear previous data and show loading in open modal immediately
+    setTraceabilityData(null);
+    setTraceabilityError(null);
+    setTraceabilityActiveId(orderId);
+    setIsTraceabilityLoading(true);
+    setIsTraceabilityModalOpen(true);
+
+    try {
+      const result = await supabaseDataService.getOrderTraceabilityAtomic(orderId);
+      // Ensure we only process if this is still the active request
+      if (currentRequestToken === traceabilityRequestCounterRef.current) {
+        setTraceabilityData(result);
+        setIsTraceabilityLoading(false);
+      }
+    } catch (err: unknown) {
+      console.error("Order traceability fetch error:", err);
+      if (currentRequestToken === traceabilityRequestCounterRef.current) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'object' &&
+                err !== null &&
+                'message' in err
+              ? String((err as { message?: unknown }).message || 'İzlenebilirlik bilgileri yüklenemedi.')
+              : 'İzlenebilirlik bilgileri yüklenemedi.';
+        setTraceabilityError(message);
+        setIsTraceabilityLoading(false);
+      }
+    }
+  };
 
   // Form states - General Order Info
   const [customerId, setCustomerId] = useState('');
@@ -663,13 +715,24 @@ export default function OrdersView({
       {detailOrder && orderStats ? (
         /* DETAILED ORDER BOARD */
         <div className="space-y-6 animate-in fade-in duration-200">
-          <button
-            onClick={() => setDetailOrder(null)}
-            className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-emerald-600 transition-colors cursor-pointer"
-          >
-            <X size={16} />
-            Sipariş Listesine Geri Dön
-          </button>
+          <div className="flex items-center justify-between flex-wrap gap-3 shrink-0">
+            <button
+              onClick={() => setDetailOrder(null)}
+              className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-emerald-600 transition-colors cursor-pointer"
+            >
+              <X size={16} />
+              Sipariş Listesine Geri Dön
+            </button>
+
+            <button
+              onClick={() => handleOpenOrderTraceability(detailOrder.id)}
+              className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 hover:border-indigo-300 px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-xs inline-flex"
+              title="Uçtan Uca Sipariş İzlenebilirliği"
+            >
+              <Activity size={14} className="text-indigo-600" />
+              Sipariş Lot İzlenebilirliği
+            </button>
+          </div>
 
           {/* Quick Stats Banner */}
           <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-xs flex flex-col md:flex-row justify-between gap-6">
@@ -1544,6 +1607,19 @@ export default function OrdersView({
           </div>
         </div>
       )}
+      {/* Order Traceability Modal */}
+      <OrderTraceabilityModal
+        isOpen={isTraceabilityModalOpen}
+        isLoading={isTraceabilityLoading}
+        error={traceabilityError}
+        data={traceabilityData}
+        onClose={() => {
+          setIsTraceabilityModalOpen(false);
+          // Also set the token reference to ignore pending calls if closed
+          traceabilityRequestCounterRef.current += 1;
+        }}
+        onRetry={traceabilityActiveId ? () => handleOpenOrderTraceability(traceabilityActiveId) : undefined}
+      />
     </div>
   );
 }
