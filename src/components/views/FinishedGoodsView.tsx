@@ -29,6 +29,9 @@ import {
   X
 } from 'lucide-react';
 import { getTodayISO, getTomorrowISO } from '../../utils/dateHelper';
+import { supabaseDataService } from '../../services/supabaseDataService';
+import { ProductionTraceabilityModal } from '../traceability/ProductionTraceabilityModal';
+import { ProductionTraceabilityResponse } from '../../types';
 
 interface FinishedGoodsViewProps {
   products: Product[];
@@ -115,6 +118,41 @@ export default function FinishedGoodsView({
   // Modals state
   const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState(false);
   const [selectedDetailGroup, setSelectedDetailGroup] = useState<DetailGroup | null>(null);
+
+  // Traceability Modal states
+  const [isTraceabilityModalOpen, setIsTraceabilityModalOpen] = useState(false);
+  const [isTraceabilityLoading, setIsTraceabilityLoading] = useState(false);
+  const [traceabilityError, setTraceabilityError] = useState<string | null>(null);
+  const [traceabilityData, setTraceabilityData] = useState<ProductionTraceabilityResponse | null>(null);
+  const [traceabilityActiveId, setTraceabilityActiveId] = useState<string | null>(null);
+  const traceabilityRequestCounterRef = React.useRef(0);
+
+  const handleOpenFinishedGoodsTraceability = async (stockId: string) => {
+    traceabilityRequestCounterRef.current += 1;
+    const currentRequestToken = traceabilityRequestCounterRef.current;
+
+    // Clear previous data and show loading in open modal immediately
+    setTraceabilityData(null);
+    setTraceabilityError(null);
+    setTraceabilityActiveId(stockId);
+    setIsTraceabilityLoading(true);
+    setIsTraceabilityModalOpen(true);
+
+    try {
+      const result = await supabaseDataService.getFinishedGoodsTraceabilityAtomic(stockId);
+      // Ensure we only process if this is still the active request
+      if (currentRequestToken === traceabilityRequestCounterRef.current) {
+        setTraceabilityData(result);
+        setIsTraceabilityLoading(false);
+      }
+    } catch (err: any) {
+      console.error("Finished goods traceability fetch error:", err);
+      if (currentRequestToken === traceabilityRequestCounterRef.current) {
+        setTraceabilityError(err.message || 'İzlenebilirlik verileri yüklenirken bir hata oluştu.');
+        setIsTraceabilityLoading(false);
+      }
+    }
+  };
 
   // Undo Shipment Modal State
   const [undoTarget, setUndoTarget] = useState<FinishedGoodsMovement | null>(null);
@@ -924,10 +962,37 @@ export default function FinishedGoodsView({
                                             <span className="text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5 font-bold text-[10px]">
                                               Parti No: {detailGroup.lotNo}
                                             </span>
-                                            {detailGroup.stocks.length > 1 && (
-                                              <span className="block text-[9px] text-slate-400 mt-1 font-normal">
-                                                Parçalı Giriş: {detailGroup.stocks.length} adet kayıt birleştirildi
-                                              </span>
+                                            
+                                            {detailGroup.stocks.length > 1 ? (
+                                              <div className="mt-1.5 space-y-1">
+                                                <span className="block text-[9px] text-indigo-900/70 font-semibold mb-1">
+                                                  Birleştirilen Kayıtlar ({detailGroup.stocks.length} Giriş):
+                                                </span>
+                                                {detailGroup.stocks.map((s, idx) => (
+                                                  <div key={s.id} className="flex items-center justify-between gap-2 bg-slate-50/80 hover:bg-slate-100 p-1 rounded border border-slate-100 text-[9px] font-medium text-slate-600">
+                                                    <span>Giriş #{idx + 1}: {s.quantityProduced} Pkt / Kalan: {s.quantityRemaining} Pkt</span>
+                                                    <button
+                                                      onClick={() => handleOpenFinishedGoodsTraceability(s.id)}
+                                                      className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-1.5 py-0.5 rounded text-[8px] transition-colors cursor-pointer shrink-0"
+                                                      title="Kaydın girdi lot izlenebilirliği"
+                                                    >
+                                                      İzlenebilirlik
+                                                    </button>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            ) : (
+                                              detailGroup.stocks[0]?.id && (
+                                                <div className="mt-1.5">
+                                                  <button
+                                                    onClick={() => handleOpenFinishedGoodsTraceability(detailGroup.stocks[0].id)}
+                                                    className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-1.5 py-0.5 rounded text-[9px] transition-all cursor-pointer inline-flex items-center gap-0.5 shrink-0"
+                                                    title="Parti girdi lot izlenebilirliği"
+                                                  >
+                                                    İzlenebilirlik
+                                                  </button>
+                                                </div>
+                                              )
                                             )}
                                             
                                             {/* Dynamic Adjustment Logs */}
@@ -1534,6 +1599,20 @@ export default function FinishedGoodsView({
           </div>
         )}
       </div>
+
+      {/* Production Traceability Modal */}
+      <ProductionTraceabilityModal
+        isOpen={isTraceabilityModalOpen}
+        isLoading={isTraceabilityLoading}
+        error={traceabilityError}
+        data={traceabilityData}
+        onClose={() => {
+          setIsTraceabilityModalOpen(false);
+          // Also set the token reference to ignore pending calls if closed
+          traceabilityRequestCounterRef.current += 1;
+        }}
+        onRetry={traceabilityActiveId ? () => handleOpenFinishedGoodsTraceability(traceabilityActiveId) : undefined}
+      />
 
     </div>
   );

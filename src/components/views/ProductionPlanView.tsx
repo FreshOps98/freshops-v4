@@ -60,6 +60,9 @@ import {
 } from '../../services/calcService';
 import { formatCurrency, formatWeight, formatDate, formatShortDate } from '../../utils/format';
 import { getTodayISO, getTomorrowISO, parseISODateSafe, addDaysISO } from '../../utils/dateHelper';
+import { supabaseDataService } from '../../services/supabaseDataService';
+import { ProductionTraceabilityModal } from '../traceability/ProductionTraceabilityModal';
+import { ProductionTraceabilityResponse } from '../../types';
 import { 
   Plus, 
   Calendar, 
@@ -258,6 +261,41 @@ export default function ProductionPlanView({
   const [isUndoProductionRunModalOpen, setIsUndoProductionRunModalOpen] = useState(false);
   const [isUndoingProductionRun, setIsUndoingProductionRun] = useState(false);
   const [undoProductionRunError, setUndoProductionRunError] = useState<string | null>(null);
+
+  // Traceability Modal states
+  const [isTraceabilityModalOpen, setIsTraceabilityModalOpen] = useState(false);
+  const [isTraceabilityLoading, setIsTraceabilityLoading] = useState(false);
+  const [traceabilityError, setTraceabilityError] = useState<string | null>(null);
+  const [traceabilityData, setTraceabilityData] = useState<ProductionTraceabilityResponse | null>(null);
+  const [traceabilityActiveId, setTraceabilityActiveId] = useState<string | null>(null);
+  const traceabilityRequestCounterRef = useRef(0);
+
+  const handleOpenProductionTraceability = async (runId: string) => {
+    traceabilityRequestCounterRef.current += 1;
+    const currentRequestToken = traceabilityRequestCounterRef.current;
+
+    // Clear previous data and show loading in open modal immediately
+    setTraceabilityData(null);
+    setTraceabilityError(null);
+    setTraceabilityActiveId(runId);
+    setIsTraceabilityLoading(true);
+    setIsTraceabilityModalOpen(true);
+
+    try {
+      const result = await supabaseDataService.getProductionRunTraceabilityAtomic(runId);
+      // Ensure we only process if this is still the active request
+      if (currentRequestToken === traceabilityRequestCounterRef.current) {
+        setTraceabilityData(result);
+        setIsTraceabilityLoading(false);
+      }
+    } catch (err: any) {
+      console.error("Traceability fetch error:", err);
+      if (currentRequestToken === traceabilityRequestCounterRef.current) {
+        setTraceabilityError(err.message || 'İzlenebilirlik verileri yüklenirken bir hata oluştu.');
+        setIsTraceabilityLoading(false);
+      }
+    }
+  };
 
   // Functions for confirming/opening delete confirmations
   const openDeleteProductionPlanItemConfirm = (itemId: string) => {
@@ -1452,6 +1490,17 @@ export default function ProductionPlanView({
                                           </div>
                                           <div className="flex items-center gap-2">
                                             <span className="text-[9px] text-slate-400 font-medium">{formatShortDate(run.productionDate)}</span>
+                                            
+                                            {run.id && (
+                                              <button
+                                                onClick={() => handleOpenProductionTraceability(run.id)}
+                                                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 hover:border-indigo-300 font-bold px-1.5 py-0.5 rounded transition-all text-[9px] cursor-pointer inline-flex items-center gap-0.5 shrink-0"
+                                                title="Üretim Girdi İzlenebilirliği"
+                                              >
+                                                İzlenebilirlik
+                                              </button>
+                                            )}
+
                                             {isClosedPlan && (
                                               <span 
                                                 className="text-slate-400 text-[9px] font-medium"
@@ -2323,6 +2372,20 @@ export default function ProductionPlanView({
           </div>
         </div>
       )}
+
+      {/* Production Traceability Modal */}
+      <ProductionTraceabilityModal
+        isOpen={isTraceabilityModalOpen}
+        isLoading={isTraceabilityLoading}
+        error={traceabilityError}
+        data={traceabilityData}
+        onClose={() => {
+          setIsTraceabilityModalOpen(false);
+          // Also set the token reference to ignore pending calls if closed
+          traceabilityRequestCounterRef.current += 1;
+        }}
+        onRetry={traceabilityActiveId ? () => handleOpenProductionTraceability(traceabilityActiveId) : undefined}
+      />
 
     </div>
   );

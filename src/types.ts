@@ -380,4 +380,113 @@ export interface CreateOrGetSupplierResult {
   already_exists: boolean;
 }
 
+// Production Lot Traceability Types
+export interface ProductionTraceabilityRawMaterial {
+  id: string;
+  name: string;
+  unit: string;
+}
+
+export interface ProductionTraceabilityRawMaterialLot {
+  id: string;
+  internalLotNo: string;
+  kunyeNumber: string;
+  kunyeStatus: string;
+  quantityReceived: number;
+  quantityRemaining: number;
+  unit: string;
+  unitPrice: number;
+  isDeleted: boolean;
+}
+
+export interface ProductionTraceabilityReceipt {
+  id: string;
+  receiptDate: string;
+  invoiceNumber: string | null;
+  dispatchNoteNumber: string | null;
+  note: string | null;
+  isDeleted: boolean;
+}
+
+export interface ProductionTraceabilitySupplier {
+  id: string;
+  name: string;
+  note: string | null;
+  isActive: boolean;
+  isDeleted: boolean;
+}
+
+export interface ProductionTraceabilityStockMovement {
+  id: string;
+  movementType: string;
+  movementDate: string;
+  quantity: number;
+  isDeleted: boolean;
+}
+
+export interface ProductionTraceabilityAllocation {
+  allocationId: string;
+  allocationMethod: string;
+  quantityConsumed: number;
+  unit: string;
+  isReversed: boolean;
+  reversedAt: string | null;
+  reversalReason: string | null;
+  rawMaterial: ProductionTraceabilityRawMaterial;
+  rawMaterialLot: ProductionTraceabilityRawMaterialLot;
+  receipt: ProductionTraceabilityReceipt;
+  supplier: ProductionTraceabilitySupplier;
+  stockMovement: ProductionTraceabilityStockMovement;
+}
+
+export interface ProductionTraceabilityRun {
+  id: string;
+  status: string;
+  producedQuantity: number;
+  productionPlanId: string;
+  productionPlanItemId: string;
+  orderId: string | null;
+  orderItemId: string | null;
+  productId: string;
+  customerId: string | null;
+  isDeleted: boolean;
+  deletedAt: string | null;
+  deletedReason: string | null;
+  createdAt: string;
+}
+
+export interface ProductionTraceabilityFinishedGoodsStock {
+  id: string;
+  lotNo: string;
+  quantityProduced: number;
+  quantityRemaining: number;
+  unit: string;
+  status: string;
+  isDeleted: boolean;
+  deletedAt: string | null;
+  deletedReason: string | null;
+}
+
+export interface ProductionTraceabilityOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  computedStatus: string;
+}
+
+export interface ProductionTraceabilityProduct {
+  id: string;
+  name: string;
+}
+
+export interface ProductionTraceabilityResponse {
+  success: boolean;
+  productionRun: ProductionTraceabilityRun;
+  finishedGoodsStock: ProductionTraceabilityFinishedGoodsStock | null;
+  order: ProductionTraceabilityOrder | null;
+  product: ProductionTraceabilityProduct | null;
+  allocations: ProductionTraceabilityAllocation[];
+}
+
+
 
