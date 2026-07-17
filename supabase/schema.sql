@@ -2765,9 +2765,9 @@ BEGIN
       organization_id,
       raw_material_id,
       movement_type,
+      movement_date,
       quantity,
       unit,
-      movement_date,
       previous_stock,
       new_stock,
       difference,
@@ -2785,9 +2785,9 @@ BEGIN
       v_org_id,
       sm.raw_material_id,
       'Üretim Geri Alma',
+      CURRENT_DATE,
       sm.quantity,
       sm.unit,
-      CURRENT_DATE,
       v_previous_stock,
       v_new_stock,
       sm.quantity,
@@ -2797,8 +2797,8 @@ BEGIN
       'production_run_reversal',
       v_run.id,
       COALESCE(p_reason, 'Üretim geri alındı'),
-      false,
-      false
+      FALSE,
+      FALSE
     );
 
     v_reversal_stock_movement_ids :=
@@ -4109,7 +4109,7 @@ BEGIN
         'unit', unit,
         'unitPrice', unit_price,
         'kunyeNumber', kunye_number,
-        'kunye_status', kunye_status,
+        'kunyeStatus', kunye_status,
         'previousStock', COALESCE(previous_stock, 0),
         'newStock', COALESCE(new_stock, 0),
         'totalCost', COALESCE(total_cost, 0)
