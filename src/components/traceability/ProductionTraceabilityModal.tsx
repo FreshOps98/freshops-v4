@@ -2,18 +2,11 @@ import React from 'react';
 import { 
   X, 
   Activity, 
-  Calendar, 
-  Tag, 
-  User, 
   ShoppingBag, 
   Layers, 
   AlertTriangle, 
   CheckCircle2, 
-  FileText, 
   Info, 
-  TrendingUp, 
-  Hash, 
-  Coins,
   RefreshCw
 } from 'lucide-react';
 import { ProductionTraceabilityResponse } from '../../types';
@@ -161,8 +154,8 @@ export const ProductionTraceabilityModal: React.FC<ProductionTraceabilityModalPr
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-400 font-medium block text-[10px]">Üretim Tarihi</span>
-                      <span className="text-slate-950 font-semibold text-xs">{formatOnlyDate(data.productionRun?.productionDate)}</span>
+                      <span className="text-slate-400 font-medium block text-[10px]">Üretim Kayıt Tarihi</span>
+                      <span className="text-slate-950 font-semibold text-xs">{formatDate(data.productionRun?.createdAt)}</span>
                     </div>
                     <div>
                       <span className="text-slate-400 font-medium block text-[10px]">Üretim Durumu</span>
@@ -340,9 +333,15 @@ export const ProductionTraceabilityModal: React.FC<ProductionTraceabilityModalPr
                                   <span className="font-semibold text-slate-800">{formatOnlyDate(alloc.receipt?.receiptDate)}</span>
                                 </div>
                                 <div className="flex items-center justify-between">
-                                  <span className="text-slate-400">Fatura / İrsaliye:</span>
+                                  <span className="text-slate-400">Fatura No:</span>
                                   <span className="font-semibold text-slate-800">
-                                    {alloc.receipt?.invoiceNumber || alloc.receipt?.dispatchNoteNumber || '-'}
+                                    {alloc.receipt?.invoiceNumber || '-'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-slate-400">İrsaliye No:</span>
+                                  <span className="font-semibold text-slate-800">
+                                    {alloc.receipt?.dispatchNoteNumber || '-'}
                                   </span>
                                 </div>
                               </div>
@@ -355,7 +354,9 @@ export const ProductionTraceabilityModal: React.FC<ProductionTraceabilityModalPr
                                 <div className="flex items-center justify-between">
                                   <span className="text-slate-400">Alış Birim Fiyatı:</span>
                                   <span className="font-bold text-slate-800">
-                                    {alloc.rawMaterialLot?.unitPrice ? `${alloc.rawMaterialLot.unitPrice.toLocaleString('tr-TR')} ₺` : '-'}
+                                    {alloc.rawMaterialLot?.unitPrice != null 
+                                      ? `${alloc.rawMaterialLot.unitPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` 
+                                      : '-'}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between">

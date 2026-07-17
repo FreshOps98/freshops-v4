@@ -270,6 +270,12 @@ export default function ProductionPlanView({
   const [traceabilityActiveId, setTraceabilityActiveId] = useState<string | null>(null);
   const traceabilityRequestCounterRef = useRef(0);
 
+  React.useEffect(() => {
+    return () => {
+      traceabilityRequestCounterRef.current += 1;
+    };
+  }, []);
+
   const handleOpenProductionTraceability = async (runId: string) => {
     traceabilityRequestCounterRef.current += 1;
     const currentRequestToken = traceabilityRequestCounterRef.current;
@@ -288,10 +294,18 @@ export default function ProductionPlanView({
         setTraceabilityData(result);
         setIsTraceabilityLoading(false);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Traceability fetch error:", err);
       if (currentRequestToken === traceabilityRequestCounterRef.current) {
-        setTraceabilityError(err.message || 'İzlenebilirlik verileri yüklenirken bir hata oluştu.');
+        const message =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'object' &&
+                err !== null &&
+                'message' in err
+              ? String((err as { message?: unknown }).message || 'İzlenebilirlik bilgileri yüklenemedi.')
+              : 'İzlenebilirlik bilgileri yüklenemedi.';
+        setTraceabilityError(message);
         setIsTraceabilityLoading(false);
       }
     }
