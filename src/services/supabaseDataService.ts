@@ -19,7 +19,8 @@ import {
   RawMaterialLot,
   CreateRawMaterialReceiptInput,
   ProductionTraceabilityResponse,
-  OrderTraceabilityResponse
+  OrderTraceabilityResponse,
+  SupplierTraceabilityResponse
 } from '../types';
 import { generateId } from './localDataService';
 import { supabase } from '../lib/supabaseClient';
@@ -1794,6 +1795,16 @@ export const supabaseDataService = {
     });
     if (error) throw error;
     return data as OrderTraceabilityResponse;
+  },
+
+  async getSupplierTraceabilityAtomic(
+    supplierId: string
+  ): Promise<SupplierTraceabilityResponse> {
+    const { data, error } = await supabase.rpc('get_supplier_traceability_atomic', {
+      p_supplier_id: supplierId
+    });
+    if (error) throw error;
+    return data as SupplierTraceabilityResponse;
   }
 };
 

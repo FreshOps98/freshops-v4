@@ -48,6 +48,7 @@ import {
 // Views
 import DashboardView from './components/views/DashboardView';
 import CustomersView from './components/views/CustomersView';
+import SuppliersView from './components/views/SuppliersView';
 import ProductsView from './components/views/ProductsView';
 import RawMaterialsView from './components/views/RawMaterialsView';
 import StockView from './components/views/StockView';
@@ -167,7 +168,8 @@ import {
   ClipboardList, 
   Activity,
   AlertTriangle,
-  LogOut
+  LogOut,
+  Truck
 } from 'lucide-react';
 
 // INITIAL DATA SEEDS (If localStorage is empty)
@@ -3119,6 +3121,16 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setActiveTab('suppliers')}
+            className={`w-full flex items-center gap-3 px-5 py-2.5 text-sm text-left transition-colors cursor-pointer ${
+              activeTab === 'suppliers' ? 'bg-emerald-500/10 text-emerald-400 border-r-2 border-emerald-500 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+            }`}
+          >
+            <Truck size={16} />
+            Tedarikçiler
+          </button>
+
+          <button
             onClick={() => setActiveTab('products')}
             className={`w-full flex items-center gap-3 px-5 py-2.5 text-sm text-left transition-colors cursor-pointer ${
               activeTab === 'products' ? 'bg-emerald-500/10 text-emerald-400 border-r-2 border-emerald-500 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
@@ -3220,6 +3232,7 @@ export default function App() {
             <h2 className="text-lg font-bold text-slate-800">
               {activeTab === 'dashboard' && 'Üretim Dashboard'}
               {activeTab === 'customers' && 'Müşteriler'}
+              {activeTab === 'suppliers' && 'Tedarikçiler'}
               {activeTab === 'products' && 'Ürün Reçeteleri'}
               {activeTab === 'rawMaterials' && 'Hammadde Tanımları'}
               {activeTab === 'stock' && 'Hammadde Stoğu & Hareketleri'}
@@ -3305,6 +3318,13 @@ export default function App() {
               onAdd={handleAddCustomer}
               onUpdate={handleUpdateCustomer}
               onDelete={handleDeleteCustomer}
+            />
+          )}
+
+          {activeTab === 'suppliers' && (
+            <SuppliersView
+              suppliers={suppliers}
+              onCreateSupplier={handleCreateOrGetSupplier}
             />
           )}
 

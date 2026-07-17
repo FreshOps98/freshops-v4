@@ -551,6 +551,124 @@ export interface OrderTraceabilityResponse {
   shipmentMovements: OrderTraceabilityShipmentMovement[];
 }
 
+export interface SupplierTraceabilitySupplier {
+  id: string;
+  name: string;
+  note: string | null;
+  isActive: boolean;
+  isDeleted: boolean;
+}
+
+export interface SupplierTraceabilityRawMaterial {
+  id: string;
+  name: string;
+  unit: string;
+}
+
+export interface SupplierTraceabilityInboundStockMovement {
+  id: string;
+  movementType: string;
+  movementDate: string;
+  quantity: number;
+  isDeleted: boolean;
+  previousStock: number | null;
+  newStock: number | null;
+  unitPrice: number | null;
+}
+
+export interface SupplierTraceabilityProductionRun {
+  id: string;
+  status: string;
+  producedQuantity: number;
+  productionDate: string | null;
+  isDeleted: boolean;
+  deletedAt: string | null;
+  deletedReason: string | null;
+  createdAt: string;
+}
+
+export interface SupplierTraceabilityFinishedGoodsStock {
+  id: string;
+  lotNo: string;
+  quantityProduced: number;
+  quantityRemaining: number;
+  unit: string;
+  status: string;
+  isDeleted: boolean;
+}
+
+export interface SupplierTraceabilityOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  computedStatus: string | null;
+}
+
+export interface SupplierTraceabilityCustomer {
+  id: string;
+  name: string;
+}
+
+export interface SupplierTraceabilityProduct {
+  id: string;
+  name: string;
+}
+
+export interface SupplierTraceabilityProductionUsage {
+  allocationId: string;
+  allocationMethod: string;
+  productionRunId: string;
+  quantityConsumed: number;
+  unit: string;
+  isReversed: boolean;
+  reversedAt: string | null;
+  reversalReason: string | null;
+  createdAt: string;
+  productionRun: SupplierTraceabilityProductionRun;
+  finishedGoodsStock: SupplierTraceabilityFinishedGoodsStock | null;
+  order: SupplierTraceabilityOrder | null;
+  customer: SupplierTraceabilityCustomer | null;
+  product: SupplierTraceabilityProduct | null;
+}
+
+export interface SupplierTraceabilityLot {
+  id: string;
+  internalLotNo: string;
+  kunyeNumber: string | null;
+  kunyeStatus: string | null;
+  quantityReceived: number;
+  quantityRemaining: number;
+  unit: string;
+  unitPrice: number;
+  note: string | null;
+  inboundStockMovementId: string;
+  isDeleted: boolean;
+  createdAt: string;
+  rawMaterial: SupplierTraceabilityRawMaterial;
+  inboundStockMovement: SupplierTraceabilityInboundStockMovement;
+  productionUsages: SupplierTraceabilityProductionUsage[];
+}
+
+export interface SupplierTraceabilityReceipt {
+  id: string;
+  supplierId: string;
+  receiptDate: string;
+  invoiceNumber: string | null;
+  dispatchNoteNumber: string | null;
+  note: string | null;
+  idempotencyKey: string | null;
+  isDeleted: boolean;
+  createdAt: string;
+  lots: SupplierTraceabilityLot[];
+}
+
+export interface SupplierTraceabilityResponse {
+  success: boolean;
+  supplier: SupplierTraceabilitySupplier;
+  receipts: SupplierTraceabilityReceipt[];
+}
+
+
 
 
 
