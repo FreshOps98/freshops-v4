@@ -18,7 +18,9 @@ import {
   Supplier,
   RawMaterialReceipt,
   RawMaterialLot,
-  CreateRawMaterialReceiptInput
+  CreateRawMaterialReceiptInput,
+  UpdateRawMaterialReceiptInput,
+  UpdateRawMaterialReceiptResult
 } from './types';
 import { formatCurrency } from './utils/format';
 import { getTodayISO, getTomorrowISO, parseISODateSafe } from './utils/dateHelper';
@@ -1541,6 +1543,50 @@ export default function App() {
       }));
 
       return { success: true, alreadyCreated: false, receiptId };
+    }
+  };
+
+  const handleUpdateRawMaterialReceipt = async (input: UpdateRawMaterialReceiptInput): Promise<UpdateRawMaterialReceiptResult> => {
+    if (USE_SUPABASE) {
+      try {
+        const result = await supabaseDataService.updateRawMaterialReceiptAtomic(input);
+        
+        // Refresh all relevant states on success
+        const [rmList, smList, supList, recList, lotList] = await Promise.all([
+          supabaseDataService.getRawMaterials(),
+          supabaseDataService.getStockMovements(),
+          supabaseDataService.getSuppliers(),
+          supabaseDataService.getRawMaterialReceipts(),
+          supabaseDataService.getRawMaterialLots()
+        ]);
+
+        setRawMaterials(rmList.map(item => ({
+          ...item,
+          averageCost: typeof item.averageCost === 'number' ? item.averageCost : (item.averageCost ?? item.purchasePrice ?? 0)
+        })));
+        setStockMovements(smList);
+        setSuppliers(supList);
+        setRawMaterialReceipts(recList);
+        setRawMaterialLots(lotList);
+
+        return result;
+      } catch (err: any) {
+        console.error("Error in updateRawMaterialReceiptAtomic:", err);
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        alert(`Satın alma fişi düzeltilirken hata oluştu: ${errorMessage}`);
+        throw err;
+      }
+    } else {
+      alert("Bu işlem yalnızca Supabase entegrasyonu ile desteklenmektedir.");
+      return {
+        success: false,
+        noChanges: true,
+        receiptId: input.receiptId,
+        updatedAt: new Date().toISOString(),
+        correctionId: null,
+        updatedLots: [],
+        recalculatedRawMaterials: []
+      };
     }
   };
 
@@ -3325,6 +3371,10 @@ export default function App() {
             <SuppliersView
               suppliers={suppliers}
               onCreateSupplier={handleCreateOrGetSupplier}
+              rawMaterials={rawMaterials}
+              rawMaterialReceipts={rawMaterialReceipts}
+              rawMaterialLots={rawMaterialLots}
+              onUpdateRawMaterialReceipt={handleUpdateRawMaterialReceipt}
             />
           )}
 
@@ -3378,6 +3428,7 @@ export default function App() {
               rawMaterialLots={rawMaterialLots}
               onCreateOrGetSupplier={handleCreateOrGetSupplier}
               onCreateRawMaterialReceipt={handleCreateRawMaterialReceipt}
+              onUpdateRawMaterialReceipt={handleUpdateRawMaterialReceipt}
             />
           )}
 

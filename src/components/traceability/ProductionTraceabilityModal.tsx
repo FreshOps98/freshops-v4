@@ -310,8 +310,10 @@ export const ProductionTraceabilityModal: React.FC<ProductionTraceabilityModalPr
                                   <span className="text-slate-800">
                                     {alloc.rawMaterialLot?.kunyeStatus === 'provided' ? (
                                       <span className="text-emerald-700 font-bold">Gerçek Künye</span>
+                                    ) : alloc.rawMaterialLot?.kunyeStatus === 'internal_placeholder' ? (
+                                      <span className="text-amber-700 font-bold">Dahili / Dummy Künye</span>
                                     ) : (
-                                      <span className="text-slate-500 italic">Dahili / Dummy</span>
+                                      <span className="text-slate-500 italic">Künye Gerekmiyor</span>
                                     )}
                                   </span>
                                 </div>

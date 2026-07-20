@@ -22,18 +22,29 @@ import {
   History,
   CornerDownRight
 } from 'lucide-react';
-import { Supplier, SupplierTraceabilityResponse } from '../../types';
+import { Supplier, SupplierTraceabilityResponse, RawMaterial, RawMaterialReceipt, RawMaterialLot, UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult } from '../../types';
 import { supabaseDataService } from '../../services/supabaseDataService';
 import { formatCurrency, formatDate } from '../../utils/format';
+import RawMaterialReceiptCorrectionModal from '../purchases/RawMaterialReceiptCorrectionModal';
 
 interface SuppliersViewProps {
   suppliers: Supplier[];
   onCreateSupplier: (name: string, note?: string) => Promise<{ supplierId: string; name: string; created: boolean }>;
+  rawMaterials?: RawMaterial[];
+  rawMaterialReceipts?: RawMaterialReceipt[];
+  rawMaterialLots?: RawMaterialLot[];
+  onUpdateRawMaterialReceipt?: (input: UpdateRawMaterialReceiptInput) => Promise<UpdateRawMaterialReceiptResult>;
+  onSuccess?: () => void;
 }
 
 export default function SuppliersView({
   suppliers,
-  onCreateSupplier
+  onCreateSupplier,
+  rawMaterials = [],
+  rawMaterialReceipts = [],
+  rawMaterialLots = [],
+  onUpdateRawMaterialReceipt,
+  onSuccess
 }: SuppliersViewProps) {
   const [selectedSupplierId, setSelectedSupplierId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -50,6 +61,37 @@ export default function SuppliersView({
   const [newSupplierNote, setNewSupplierNote] = useState('');
   const [modalMessage, setModalMessage] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+
+  // Correction Modal States
+  const [selectedCorrectionReceiptId, setSelectedCorrectionReceiptId] = useState<string | null>(null);
+  const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState(false);
+
+  const selectedCorrectionReceipt = React.useMemo(() => {
+    if (!selectedCorrectionReceiptId) return null;
+    return (rawMaterialReceipts || []).find(r => r.id === selectedCorrectionReceiptId) || null;
+  }, [rawMaterialReceipts, selectedCorrectionReceiptId]);
+
+  const modalLots = React.useMemo(() => {
+    if (!traceabilityData) return rawMaterialLots;
+    const detailedLotsMap = new Map<string, any>();
+    traceabilityData.receipts.forEach(r => {
+      if (r.lots) {
+        r.lots.forEach(l => {
+          detailedLotsMap.set(l.id, l);
+        });
+      }
+    });
+    return rawMaterialLots.map(lot => {
+      const detailed = detailedLotsMap.get(lot.id);
+      if (detailed) {
+        return {
+          ...lot,
+          productionUsages: detailed.productionUsages
+        };
+      }
+      return lot;
+    });
+  }, [rawMaterialLots, traceabilityData]);
 
   // Component unmount and fast selector protection
   useEffect(() => {
@@ -431,6 +473,18 @@ export default function SuppliersView({
                           </div>
                           
                           <div className="flex items-center gap-2">
+                            {onUpdateRawMaterialReceipt && !receipt.isDeleted && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedCorrectionReceiptId(receipt.id);
+                                  setIsCorrectionModalOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1 bg-white hover:bg-slate-100 text-indigo-700 hover:text-indigo-800 px-2 py-0.5 rounded border border-slate-200 text-[10px] font-bold transition-colors cursor-pointer"
+                              >
+                                <span>Fişi Düzenle</span>
+                              </button>
+                            )}
                             {receipt.isDeleted ? (
                               <span className="text-[9px] bg-rose-100 text-rose-800 font-bold border border-rose-200 rounded px-1.5 py-0.5">
                                 Fiş İptal Edildi
@@ -469,7 +523,7 @@ export default function SuppliersView({
                                       </span>
                                       {lot.kunyeNumber && (
                                         <span className="text-[9px] bg-slate-100 text-slate-700 font-mono font-bold border border-slate-200 rounded px-1.5 py-0.5" title="Künye Numarası">
-                                          Künye No: {lot.kunyeNumber} ({lot.kunyeStatus === 'provided' ? 'Gerçek Künye' : 'Dahili / Dummy Künye'})
+                                          Künye No: {lot.kunyeNumber} ({lot.kunyeStatus === 'provided' ? 'Gerçek Künye' : lot.kunyeStatus === 'internal_placeholder' ? 'Dahili / Dummy Künye' : 'Künye Gerekmiyor'})
                                         </span>
                                       )}
                                     </div>
@@ -742,6 +796,25 @@ export default function SuppliersView({
         </div>
       )}
 
+      {isCorrectionModalOpen && selectedCorrectionReceipt && onUpdateRawMaterialReceipt && (
+        <RawMaterialReceiptCorrectionModal
+          isOpen={isCorrectionModalOpen}
+          onClose={() => {
+            setIsCorrectionModalOpen(false);
+            setSelectedCorrectionReceiptId(null);
+          }}
+          receipt={selectedCorrectionReceipt}
+          lots={modalLots}
+          rawMaterials={rawMaterials}
+          onUpdateReceipt={onUpdateRawMaterialReceipt}
+          onSuccess={() => {
+            if (selectedSupplierId) {
+              void fetchTraceability(selectedSupplierId);
+            }
+            onSuccess?.();
+          }}
+        />
+      )}
     </div>
   );
 }

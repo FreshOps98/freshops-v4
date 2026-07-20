@@ -20,7 +20,11 @@ import {
   CreateRawMaterialReceiptInput,
   ProductionTraceabilityResponse,
   OrderTraceabilityResponse,
-  SupplierTraceabilityResponse
+  SupplierTraceabilityResponse,
+  UpdateRawMaterialReceiptInput,
+  UpdateRawMaterialReceiptResult,
+  RawMaterialReceiptCorrection,
+  KunyeStatus
 } from '../types';
 import { generateId } from './localDataService';
 import { supabase } from '../lib/supabaseClient';
@@ -663,8 +667,8 @@ export function dbToRawMaterialLot(row: any): RawMaterialLot {
     rawMaterialId: row.raw_material_id,
     inboundStockMovementId: row.inbound_stock_movement_id,
     internalLotNo: row.internal_lot_no || '',
-    kunyeNumber: row.kunye_number || '',
-    kunyeStatus: row.kunye_status || 'provided',
+    kunyeNumber: row.kunye_number === null || row.kunye_number === undefined ? null : row.kunye_number,
+    kunyeStatus: (row.kunye_status || 'not_applicable') as KunyeStatus,
     quantityReceived: toNumber(row.quantity_received, 0),
     quantityRemaining: toNumber(row.quantity_remaining, 0),
     unit: row.unit || '',
@@ -1805,6 +1809,49 @@ export const supabaseDataService = {
     });
     if (error) throw error;
     return data as SupplierTraceabilityResponse;
+  },
+
+  async updateRawMaterialReceiptAtomic(
+    input: UpdateRawMaterialReceiptInput
+  ): Promise<UpdateRawMaterialReceiptResult> {
+    const { data, error } = await supabase.rpc('update_raw_material_receipt_atomic', {
+      p_receipt_id: input.receiptId,
+      p_expected_updated_at: input.expectedUpdatedAt,
+      p_lines: input.lines,
+      p_reason: input.reason,
+      p_invoice_number: input.invoiceNumber || null,
+      p_dispatch_note_number: input.dispatchNoteNumber || null,
+      p_note: input.note || null
+    });
+    if (error) {
+      console.error("updateRawMaterialReceiptAtomic error:", error);
+      throw error;
+    }
+    return data as UpdateRawMaterialReceiptResult;
+  },
+
+  async getRawMaterialReceiptCorrections(
+    receiptId: string
+  ): Promise<RawMaterialReceiptCorrection[]> {
+    const { data, error } = await supabase
+      .from('raw_material_receipt_corrections')
+      .select('*')
+      .eq('raw_material_receipt_id', receiptId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.error("getRawMaterialReceiptCorrections error:", error);
+      throw error;
+    }
+    return (data || []).map(row => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      rawMaterialReceiptId: row.raw_material_receipt_id,
+      beforeState: row.before_state,
+      afterState: row.after_state,
+      reason: row.reason,
+      createdBy: row.created_by,
+      createdAt: row.created_at
+    }));
   }
 };
 

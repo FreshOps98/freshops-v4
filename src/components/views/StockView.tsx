@@ -19,11 +19,12 @@ import React, { useState } from 'react';
  *    - stock_movements -> Her bir stok kaydı bu tabloya yazılır. `raw_material_id` üzerinden hammadde kartına bağlanır.
  *    - raw_materials -> Stok listelerinde hammadde isimleri ve kritik limitleri eşleştirmek için kullanılır.
  */
-import { RawMaterial, StockMovement, StockMovementType, Order, OrderItem, Product, ProductRecipeItem, CostSettings, ProductionRun, FinishedGoodsStock, FinishedGoodsMovement, Supplier, RawMaterialReceipt, RawMaterialLot, CreateRawMaterialReceiptInput, RawMaterialReceiptLineInput } from '../../types';
+import { RawMaterial, StockMovement, StockMovementType, Order, OrderItem, Product, ProductRecipeItem, CostSettings, ProductionRun, FinishedGoodsStock, FinishedGoodsMovement, Supplier, RawMaterialReceipt, RawMaterialLot, CreateRawMaterialReceiptInput, RawMaterialReceiptLineInput, UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult, KunyeStatus } from '../../types';
 import { calculateUnifiedRawMaterialNeeds, calculateWeightedAverageCost } from '../../services/calcService';
 import { formatCurrency, formatWeight, formatDate, formatShortDate } from '../../utils/format';
-import { Plus, Search, HelpCircle, History, Info, AlertTriangle, ArrowUpRight, ArrowDownLeft, Trash2, Edit2, Calendar, X, Sliders } from 'lucide-react';
+import { Plus, Search, HelpCircle, History, Info, AlertTriangle, ArrowUpRight, ArrowDownLeft, Trash2, Edit2, Calendar, X, Sliders, Edit3 } from 'lucide-react';
 import { getTodayISO, getTomorrowISO } from '../../utils/dateHelper';
+import RawMaterialReceiptCorrectionModal from '../purchases/RawMaterialReceiptCorrectionModal';
 
 interface StockViewProps {
   rawMaterials: RawMaterial[];
@@ -47,6 +48,7 @@ interface StockViewProps {
   rawMaterialLots?: RawMaterialLot[];
   onCreateOrGetSupplier?: (name: string, note?: string) => Promise<{ supplierId: string; name: string; created: boolean }>;
   onCreateRawMaterialReceipt?: (input: CreateRawMaterialReceiptInput) => Promise<any>;
+  onUpdateRawMaterialReceipt?: (input: UpdateRawMaterialReceiptInput) => Promise<UpdateRawMaterialReceiptResult>;
 }
 
 export default function StockView({
@@ -70,12 +72,14 @@ export default function StockView({
   rawMaterialReceipts = [],
   rawMaterialLots = [],
   onCreateOrGetSupplier,
-  onCreateRawMaterialReceipt
+  onCreateRawMaterialReceipt,
+  onUpdateRawMaterialReceipt
 }: StockViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isReceiptCorrectionModalOpen, setIsReceiptCorrectionModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'status' | 'movements' | 'purchase_history'>('status');
   const [stockMovementPage, setStockMovementPage] = useState<number>(1);
 
@@ -112,7 +116,7 @@ export default function StockView({
     quantity: string;
     unitPrice: string;
     kunyeNumber: string;
-    kunyeStatus: 'provided' | 'internal_placeholder';
+    kunyeStatus: KunyeStatus;
     note: string;
   }>>([]);
   const [isPurchaseSubmitting, setIsPurchaseSubmitting] = useState(false);
@@ -178,12 +182,14 @@ export default function StockView({
     setPurchaseDispatchNoteNumber('');
     setPurchaseNote('');
     const activeMaterials = rawMaterials.filter(rm => rm.isActive);
+    const firstMaterial = activeMaterials[0];
+    const isFruitOrVeg = firstMaterial ? (firstMaterial.category === 'Meyve' || firstMaterial.category === 'Sebze') : false;
     setPurchaseLines([{ 
-      rawMaterialId: activeMaterials[0]?.id || '', 
+      rawMaterialId: firstMaterial?.id || '', 
       quantity: '10', 
-      unitPrice: activeMaterials[0]?.purchasePrice?.toString() || '0', 
+      unitPrice: firstMaterial?.purchasePrice?.toString() || '0', 
       kunyeNumber: '', 
-      kunyeStatus: 'provided',
+      kunyeStatus: isFruitOrVeg ? 'provided' : 'not_applicable',
       note: '' 
     }]);
     setPurchaseIdempotencyKey(`purchase-ui-${crypto.randomUUID()}`);
@@ -239,7 +245,7 @@ export default function StockView({
         setPurchaseError(`${i + 1}. satırda birim fiyat sıfır veya pozitif bir sayı olmalıdır.`);
         return;
       }
-      if (!line.kunyeNumber.trim()) {
+      if (line.kunyeStatus !== 'not_applicable' && !line.kunyeNumber.trim()) {
         setPurchaseError(`${i + 1}. satırda künye numarası zorunludur.`);
         return;
       }
@@ -257,7 +263,7 @@ export default function StockView({
         raw_material_id: line.rawMaterialId,
         quantity: parseFloat(line.quantity),
         unit_price: parseFloat(line.unitPrice),
-        kunye_number: line.kunyeNumber.trim(),
+        kunye_number: line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber.trim() || null),
         kunye_status: line.kunyeStatus,
         note: line.note.trim() || null
       }));
@@ -971,7 +977,19 @@ export default function StockView({
                   <div className="border-b border-slate-100 pb-3">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Satın Alma Detayları</h4>
-                      <span className="text-xs font-mono text-slate-400 font-semibold">{selectedReceipt.id}</span>
+                      <div className="flex items-center gap-2">
+                        {onUpdateRawMaterialReceipt && (
+                          <button
+                            type="button"
+                            onClick={() => setIsReceiptCorrectionModalOpen(true)}
+                            className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-2.5 py-1 rounded-lg text-[10px] font-bold border border-indigo-100 transition-colors cursor-pointer"
+                          >
+                            <Edit3 size={12} />
+                            <span>Fişi Düzenle</span>
+                          </button>
+                        )}
+                        <span className="text-xs font-mono text-slate-400 font-semibold">{selectedReceipt.id}</span>
+                      </div>
                     </div>
                     <p className="text-xs text-slate-500 mt-1 font-semibold">
                       Tedarikçi: <span className="font-bold text-slate-800">{supplierMap[selectedReceipt.supplierId] || 'Bilinmeyen Tedarikçi'}</span>
@@ -1003,9 +1021,11 @@ export default function StockView({
                                   <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold mt-1 ${
                                     lot.kunyeStatus === 'provided'
                                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                                      : 'bg-amber-50 text-amber-700 border border-amber-100'
+                                      : lot.kunyeStatus === 'internal_placeholder'
+                                        ? 'bg-amber-50 text-amber-700 border border-amber-100'
+                                        : 'bg-slate-50 text-slate-600 border border-slate-100'
                                   }`}>
-                                    {lot.kunyeStatus === 'provided' ? 'Gerçek Künye' : 'Dahili / Dummy Künye'}
+                                    {lot.kunyeStatus === 'provided' ? 'Gerçek Künye' : lot.kunyeStatus === 'internal_placeholder' ? 'Dahili / Dummy Künye' : 'Künye Gerekmiyor'}
                                   </span>
                                 </div>
                                 <div>
@@ -1547,14 +1567,16 @@ export default function StockView({
                     type="button"
                     onClick={() => {
                       const activeMaterials = rawMaterials.filter(rm => rm.isActive);
+                      const firstMaterial = activeMaterials[0];
+                      const isFruitOrVeg = firstMaterial ? (firstMaterial.category === 'Meyve' || firstMaterial.category === 'Sebze') : false;
                       setPurchaseLines([
                         ...purchaseLines,
                         {
-                          rawMaterialId: activeMaterials[0]?.id || '',
+                          rawMaterialId: firstMaterial?.id || '',
                           quantity: '10',
-                          unitPrice: activeMaterials[0]?.purchasePrice?.toString() || '0',
+                          unitPrice: firstMaterial?.purchasePrice?.toString() || '0',
                           kunyeNumber: '',
-                          kunyeStatus: 'provided',
+                          kunyeStatus: isFruitOrVeg ? 'provided' : 'not_applicable',
                           note: ''
                         }
                       ]);
@@ -1569,6 +1591,7 @@ export default function StockView({
                   {purchaseLines.map((line, idx) => {
                     const selectedRM = rawMaterials.find(r => r.id === line.rawMaterialId);
                     const rmUnit = selectedRM?.unit || '';
+                    const isFruitOrVeg = selectedRM ? (selectedRM.category === 'Meyve' || selectedRM.category === 'Sebze') : false;
 
                     return (
                       <div key={idx} className="bg-slate-50/50 p-3 rounded-xl border border-slate-100 grid grid-cols-1 md:grid-cols-12 gap-3 items-end font-sans">
@@ -1583,6 +1606,9 @@ export default function StockView({
                               const rm = rawMaterials.find(r => r.id === e.target.value);
                               if (rm) {
                                 updated[idx].unitPrice = rm.purchasePrice.toString();
+                                const isFruitOrVeg = rm.category === 'Meyve' || rm.category === 'Sebze';
+                                updated[idx].kunyeStatus = isFruitOrVeg ? 'provided' : 'not_applicable';
+                                updated[idx].kunyeNumber = '';
                               }
                               setPurchaseLines(updated);
                             }}
@@ -1634,13 +1660,20 @@ export default function StockView({
                             value={line.kunyeStatus}
                             onChange={(e) => {
                               const updated = [...purchaseLines];
-                              updated[idx].kunyeStatus = e.target.value as 'provided' | 'internal_placeholder';
+                              const newStatus = e.target.value as KunyeStatus;
+                              updated[idx].kunyeStatus = newStatus;
+                              if (newStatus === 'not_applicable') {
+                                updated[idx].kunyeNumber = '';
+                              }
                               setPurchaseLines(updated);
                             }}
                             className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
                           >
                             <option value="provided">Gerçek Künye</option>
                             <option value="internal_placeholder">Dahili / Dummy</option>
+                            {!isFruitOrVeg && (
+                              <option value="not_applicable">Künye Gerekmiyor</option>
+                            )}
                           </select>
                         </div>
 
@@ -1648,15 +1681,20 @@ export default function StockView({
                           <label className="block text-[10px] font-bold text-slate-500 mb-1">Künye No / Kodu *</label>
                           <input
                             type="text"
-                            required
-                            value={line.kunyeNumber}
+                            required={line.kunyeStatus !== 'not_applicable'}
+                            disabled={line.kunyeStatus === 'not_applicable'}
+                            value={line.kunyeStatus === 'not_applicable' ? '' : line.kunyeNumber}
                             onChange={(e) => {
                               const updated = [...purchaseLines];
                               updated[idx].kunyeNumber = e.target.value;
                               setPurchaseLines(updated);
                             }}
-                            placeholder="Künye girin"
-                            className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none font-mono"
+                            placeholder={line.kunyeStatus === 'not_applicable' ? 'Gerekmiyor' : 'Künye girin'}
+                            className={`w-full px-2.5 py-1.5 rounded-lg border text-xs focus:outline-none font-mono ${
+                              line.kunyeStatus === 'not_applicable'
+                                ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                : 'bg-white border-slate-200 text-slate-800'
+                            }`}
                           />
                         </div>
 
@@ -1739,6 +1777,17 @@ export default function StockView({
             </form>
           </div>
         </div>
+      )}
+
+      {isReceiptCorrectionModalOpen && onUpdateRawMaterialReceipt && (
+        <RawMaterialReceiptCorrectionModal
+          isOpen={isReceiptCorrectionModalOpen}
+          onClose={() => setIsReceiptCorrectionModalOpen(false)}
+          receipt={selectedReceipt}
+          lots={rawMaterialLots}
+          rawMaterials={rawMaterials}
+          onUpdateReceipt={onUpdateRawMaterialReceipt}
+        />
       )}
     </div>
   );

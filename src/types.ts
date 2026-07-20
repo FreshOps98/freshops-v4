@@ -308,7 +308,7 @@ export interface CloseProductionPlanAction {
 }
 
 // New Raw Material Purchase & Lot Traceability Types
-export type KunyeStatus = 'provided' | 'internal_placeholder';
+export type KunyeStatus = 'provided' | 'internal_placeholder' | 'not_applicable';
 
 export interface Supplier {
   id: string;
@@ -339,7 +339,7 @@ export interface RawMaterialLot {
   rawMaterialId: string;
   inboundStockMovementId: string;
   internalLotNo: string;
-  kunyeNumber: string;
+  kunyeNumber: string | null;
   kunyeStatus: KunyeStatus;
   quantityReceived: number;
   quantityRemaining: number;
@@ -355,8 +355,8 @@ export interface RawMaterialReceiptLineInput {
   raw_material_id: string;
   quantity: number;
   unit_price: number;
-  kunye_number: string;
-  kunye_status: 'provided' | 'internal_placeholder';
+  kunye_number: string | null;
+  kunye_status: KunyeStatus;
   note?: string | null;
 }
 
@@ -378,6 +378,87 @@ export interface CreateRawMaterialReceiptResult {
 export interface CreateOrGetSupplierResult {
   supplier_id: string;
   already_exists: boolean;
+}
+
+export interface UpdateRawMaterialReceiptLineInput {
+  lotId: string;
+  unitPrice: number;
+  kunyeStatus: KunyeStatus;
+  kunyeNumber: string | null;
+  note?: string | null;
+}
+
+export interface UpdateRawMaterialReceiptInput {
+  receiptId: string;
+  expectedUpdatedAt: string;
+  lines: UpdateRawMaterialReceiptLineInput[];
+  reason: string;
+  invoiceNumber?: string | null;
+  dispatchNoteNumber?: string | null;
+  note?: string | null;
+}
+
+export interface UpdateRawMaterialReceiptResult {
+  success: boolean;
+  noChanges: boolean;
+  receiptId: string;
+  updatedAt: string;
+  correctionId: string | null;
+  updatedLots: {
+    lotId: string;
+    kunyeStatus: KunyeStatus;
+    kunyeNumber: string | null;
+    note: string | null;
+  }[];
+  recalculatedRawMaterials: {
+    rawMaterialId: string;
+    purchasePrice: number;
+    averageCost: number;
+  }[];
+}
+
+export interface RawMaterialReceiptCorrectionState {
+  receipt: {
+    id: string;
+    supplier_id: string;
+    receipt_date: string;
+    invoice_number: string | null;
+    dispatch_note_number: string | null;
+    note: string | null;
+    updated_at: string;
+  };
+  lots: {
+    id: string;
+    raw_material_id: string;
+    unit_price: number;
+    kunye_status: KunyeStatus;
+    kunye_number: string | null;
+    note: string | null;
+    updated_at: string;
+  }[];
+  movements: {
+    id: string;
+    raw_material_id: string;
+    unit_price: number;
+    total_cost: number;
+    note: string | null;
+  }[];
+  raw_materials: {
+    id: string;
+    purchase_price: number;
+    average_cost: number;
+  }[];
+}
+
+export interface RawMaterialReceiptCorrection {
+  id: string;
+  organizationId: string;
+  rawMaterialReceiptId: string;
+  beforeState: RawMaterialReceiptCorrectionState;
+  afterState: RawMaterialReceiptCorrectionState;
+  reason: string;
+  createdBy: string | null;
+  createdAt: string;
 }
 
 // Production Lot Traceability Types
