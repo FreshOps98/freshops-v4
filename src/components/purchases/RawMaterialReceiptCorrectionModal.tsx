@@ -7,7 +7,8 @@ import {
 import { 
   RawMaterialReceipt, RawMaterialLot, RawMaterial, 
   UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult, 
-  RawMaterialReceiptCorrection, KunyeStatus 
+  RawMaterialReceiptCorrection, KunyeStatus, RawMaterialReceiptCorrectionModalLot,
+  RawMaterialReceiptCorrectionState
 } from '../../types';
 import { supabaseDataService } from '../../services/supabaseDataService';
 import { formatCurrency, formatDate } from '../../utils/format';
@@ -16,7 +17,7 @@ interface RawMaterialReceiptCorrectionModalProps {
   isOpen: boolean;
   onClose: () => void;
   receipt: RawMaterialReceipt | null;
-  lots: RawMaterialLot[];
+  lots: RawMaterialReceiptCorrectionModalLot[];
   rawMaterials: RawMaterial[];
   onUpdateReceipt: (input: UpdateRawMaterialReceiptInput) => Promise<UpdateRawMaterialReceiptResult>;
   onSuccess?: () => void;
@@ -29,12 +30,36 @@ interface EditableLine {
   quantityReceived: number;
   quantityRemaining: number;
   unit: string;
-  unitPrice: number;
+  unitPrice: string;
   kunyeStatus: KunyeStatus;
   kunyeNumber: string | null;
   note: string;
   isFruitOrVeg: boolean;
   isPriceLocked: boolean;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (!error) return "Bilinmeyen bir hata oluştu.";
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  if (typeof error === 'string') return error;
+  return JSON.stringify(error);
+}
+
+function isOptimisticConcurrencyError(errorMessage: string): boolean {
+  const lowerMessage = errorMessage.toLowerCase();
+  const triggers = [
+    'başka bir işlem',
+    'güncellenmiş',
+    'güncelleme zamanı',
+    'beklenen güncelleme',
+    'optimistic',
+    'concurrency',
+    'lock'
+  ];
+  return triggers.some(trigger => lowerMessage.includes(trigger));
 }
 
 export default function RawMaterialReceiptCorrectionModal({
@@ -54,7 +79,7 @@ export default function RawMaterialReceiptCorrectionModal({
   
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [successResult, setSuccessResult] = useState<UpdateRawMaterialReceiptResult | null>(null);
 
   // History State
   const [corrections, setCorrections] = useState<RawMaterialReceiptCorrection[]>([]);
@@ -79,7 +104,7 @@ export default function RawMaterialReceiptCorrectionModal({
       const initialLines = receiptLots.map(lot => {
         const rm = rawMaterials.find(r => r.id === lot.rawMaterialId);
         const isFruitOrVeg = rm ? (rm.category === 'Meyve' || rm.category === 'Sebze') : false;
-        const isPriceLocked = Math.abs(lot.quantityRemaining - lot.quantityReceived) > 0.0001;
+        const isPriceLocked = Math.abs(lot.quantityRemaining - lot.quantityReceived) > 0.0001 || lot.hasProductionUsageHistory === true;
         
         return {
           id: lot.id,
@@ -88,7 +113,7 @@ export default function RawMaterialReceiptCorrectionModal({
           quantityReceived: lot.quantityReceived,
           quantityRemaining: lot.quantityRemaining,
           unit: lot.unit,
-          unitPrice: lot.unitPrice,
+          unitPrice: lot.unitPrice.toString(),
           kunyeStatus: lot.kunyeStatus || (isFruitOrVeg ? 'provided' : 'not_applicable'),
           kunyeNumber: lot.kunyeNumber,
           note: lot.note || '',
@@ -103,6 +128,7 @@ export default function RawMaterialReceiptCorrectionModal({
       setGeneralNote(receipt.note || '');
       setReason('');
       setFormError(null);
+      setSuccessResult(null);
       setExpandedCorrectionId(null);
       
       void fetchCorrections();
@@ -115,7 +141,7 @@ export default function RawMaterialReceiptCorrectionModal({
     try {
       const history = await supabaseDataService.getRawMaterialReceiptCorrections(receipt.id);
       setCorrections(history);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Error fetching corrections:", err);
     } finally {
       setLoadingHistory(false);
@@ -125,13 +151,17 @@ export default function RawMaterialReceiptCorrectionModal({
   if (!isOpen || !receipt) return null;
 
   // Handler for line editing
-  const handleLineFieldChange = (lotId: string, field: keyof EditableLine, value: any) => {
+  const handleLineFieldChange = <K extends keyof EditableLine>(
+    lotId: string,
+    field: K,
+    value: EditableLine[K]
+  ) => {
     setLines(prev => prev.map(line => {
       if (line.id === lotId) {
         const updated = { ...line, [field]: value };
         
         // If status changed to 'not_applicable', clear kunyeNumber
-        if (field === 'kunyeStatus' && value === 'not_applicable') {
+        if (field === 'kunyeStatus' && (value as unknown) === 'not_applicable') {
           updated.kunyeNumber = null;
         }
         
@@ -176,8 +206,14 @@ export default function RawMaterialReceiptCorrectionModal({
         }
       }
 
-      if (line.unitPrice === undefined || line.unitPrice === null || line.unitPrice < 0) {
-        setFormError(`"${rmInfo.name}" için birim fiyat sıfır veya pozitif bir sayı olmalıdır.`);
+      const rawPrice = line.unitPrice.trim();
+      if (rawPrice === "") {
+        setFormError(`"${rmInfo.name}" için birim fiyat boş bırakılamaz.`);
+        return;
+      }
+      const parsedPrice = Number(rawPrice);
+      if (isNaN(parsedPrice) || !isFinite(parsedPrice) || parsedPrice < 0) {
+        setFormError(`"${rmInfo.name}" için birim fiyat sıfır veya pozitif geçerli bir sayı olmalıdır.`);
         return;
       }
     }
@@ -193,28 +229,26 @@ export default function RawMaterialReceiptCorrectionModal({
         note: generalNote.trim() || null,
         lines: lines.map(line => ({
           lotId: line.id,
-          unitPrice: Number(line.unitPrice),
+          unitPrice: Number(line.unitPrice.trim()),
           kunyeStatus: line.kunyeStatus,
           kunyeNumber: line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber?.trim() || null),
           note: line.note.trim() || null
         }))
       };
 
-      await onUpdateReceipt(payload);
-      setShowSuccessToast(true);
-      onSuccess?.();
-      
-      setTimeout(() => {
-        setShowSuccessToast(false);
-        onClose();
-      }, 1500);
-    } catch (err: any) {
-      console.error("Receipt correction failed:", err);
-      // Clean and descriptive error message
-      if (err.message && err.message.includes("lock")) {
-        setFormError("Hata: Bu fatura başka bir kullanıcı tarafından güncellenmiş. Lütfen sayfayı yenileyip tekrar deneyin.");
+      const result = await onUpdateReceipt(payload);
+      if (result.success === false) {
+        setFormError("İşlem başarısız oldu. Güncelleme tamamlanamadı.");
       } else {
-        setFormError(err.message || "Fatura düzeltilirken beklenmedik bir hata oluştu.");
+        setSuccessResult(result);
+      }
+    } catch (err: unknown) {
+      console.error("Receipt correction failed:", err);
+      const errMsg = getErrorMessage(err);
+      if (isOptimisticConcurrencyError(errMsg)) {
+        setFormError("Bu fiş başka bir işlem tarafından güncellendi. Verileri yenileyip tekrar deneyin.");
+      } else {
+        setFormError(errMsg);
       }
     } finally {
       setIsSubmitting(false);
@@ -266,8 +300,10 @@ export default function RawMaterialReceiptCorrectionModal({
     const beforeLines = before.lots || [];
     const afterLines = after.lots || [];
 
-    afterLines.forEach((afterLine: any) => {
-      const beforeLine = beforeLines.find((l: any) => l.id === afterLine.id);
+    type LotStateItem = RawMaterialReceiptCorrectionState['lots'][number];
+
+    afterLines.forEach((afterLine: LotStateItem) => {
+      const beforeLine = beforeLines.find((l: LotStateItem) => l.id === afterLine.id);
       if (!beforeLine) return;
 
       const rmInfo = rmMap[afterLine.raw_material_id] || { name: 'Bilinmeyen Hammadde' };
@@ -360,29 +396,60 @@ export default function RawMaterialReceiptCorrectionModal({
           <button 
             type="button" 
             onClick={onClose} 
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            disabled={isSubmitting}
+            className={`p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ${isSubmitting ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <X size={20} />
           </button>
         </div>
 
-        {/* Success Alert */}
-        <AnimatePresence>
-          {showSuccessToast && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="bg-emerald-500 text-white px-6 py-3 font-semibold text-xs flex items-center gap-2 shadow-inner shrink-0"
-            >
-              <CheckCircle2 size={16} />
-              <span>Satın alma fişi ve ilişkili partiler başarıyla, atomik biçimde düzeltildi!</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Form Body */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
+        {successResult ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 space-y-4 text-center overflow-y-auto bg-slate-50">
+            <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-600 shadow-sm border border-emerald-100">
+              <CheckCircle2 size={36} className="animate-bounce" />
+            </div>
+            <h4 className="text-lg font-bold text-slate-800">
+              {successResult.noChanges 
+                ? "Herhangi bir değişiklik bulunmadı" 
+                : "Satın Alma Fişi Başarıyla Güncellendi"}
+            </h4>
+            <p className="text-xs text-slate-500 max-w-md font-semibold leading-relaxed">
+              {successResult.noChanges 
+                ? "Form verilerinde veya ilişkili partilerde herhangi bir değişiklik tespit edilmedi. Düzeltme kaydı oluşturulmadı." 
+                : "Satın alma fişi, fiyatlar, irsaliye/fatura numaraları ve ilişkili parti bilgileri başarıyla atomik olarak güncellendi."}
+            </p>
+            
+            {!successResult.noChanges && successResult.correctionId && (
+              <div className="bg-white border border-slate-200/80 rounded-2xl p-4 w-full max-w-md text-left space-y-2.5 shadow-xs font-sans mt-2">
+                <div className="flex justify-between text-xs items-center">
+                  <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Düzeltme Kayıt ID</span>
+                  <span className="text-slate-700 font-mono font-bold bg-slate-100 px-2 py-0.5 rounded">{successResult.correctionId}</span>
+                </div>
+                <div className="flex justify-between text-xs items-center">
+                  <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Güncellenme Zamanı</span>
+                  <span className="text-slate-700 font-semibold">{formatDate(successResult.updatedAt)}</span>
+                </div>
+              </div>
+            )}
+            
+            <div className="pt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  onSuccess?.();
+                  onClose();
+                  setSuccessResult(null);
+                }}
+                className="px-6 py-3 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 shadow-md shadow-indigo-200 transition-all active:scale-95 cursor-pointer"
+              >
+                Kapat ve Listeyi Yenile
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Form Body */}
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
           
           {formError && (
             <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3 text-xs text-rose-800 font-semibold animate-pulse">
@@ -483,11 +550,11 @@ export default function RawMaterialReceiptCorrectionModal({
                         <label className="block text-[10px] font-bold text-slate-500 uppercase">Birim Fiyat (TL)</label>
                         <div className="relative">
                           <input
-                            type="number"
-                            step="0.0001"
+                            type="text"
                             disabled={line.isPriceLocked}
-                            value={line.unitPrice === 0 ? '' : line.unitPrice}
-                            onChange={(e) => handleLineFieldChange(line.id, 'unitPrice', parseFloat(e.target.value) || 0)}
+                            value={line.unitPrice}
+                            onChange={(e) => handleLineFieldChange(line.id, 'unitPrice', e.target.value)}
+                            placeholder="0.0000"
                             className={`w-full px-3 py-1.5 rounded-xl border text-xs font-bold focus:outline-none focus:border-indigo-500 ${
                               line.isPriceLocked 
                                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' 
@@ -629,7 +696,7 @@ export default function RawMaterialReceiptCorrectionModal({
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isSubmitting || showSuccessToast}
+              disabled={isSubmitting}
               className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 disabled:bg-indigo-400 flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               {isSubmitting ? (
@@ -646,7 +713,9 @@ export default function RawMaterialReceiptCorrectionModal({
             </button>
           </div>
         </div>
-      </motion.div>
+      </>
+    )}
+  </motion.div>
     </div>
   );
 }

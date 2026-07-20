@@ -1570,23 +1570,14 @@ export default function App() {
         setRawMaterialLots(lotList);
 
         return result;
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Error in updateRawMaterialReceiptAtomic:", err);
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        alert(`Satın alma fişi düzeltilirken hata oluştu: ${errorMessage}`);
         throw err;
       }
     } else {
-      alert("Bu işlem yalnızca Supabase entegrasyonu ile desteklenmektedir.");
-      return {
-        success: false,
-        noChanges: true,
-        receiptId: input.receiptId,
-        updatedAt: new Date().toISOString(),
-        correctionId: null,
-        updatedLots: [],
-        recalculatedRawMaterials: []
-      };
+      throw new Error(
+        'Satın alma fişi düzeltme işlemi yalnızca veritabanı modunda kullanılabilir.'
+      );
     }
   };
 

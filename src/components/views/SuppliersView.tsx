@@ -22,7 +22,7 @@ import {
   History,
   CornerDownRight
 } from 'lucide-react';
-import { Supplier, SupplierTraceabilityResponse, RawMaterial, RawMaterialReceipt, RawMaterialLot, UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult } from '../../types';
+import { Supplier, SupplierTraceabilityResponse, RawMaterial, RawMaterialReceipt, RawMaterialLot, UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult, RawMaterialReceiptCorrectionModalLot, SupplierTraceabilityLot } from '../../types';
 import { supabaseDataService } from '../../services/supabaseDataService';
 import { formatCurrency, formatDate } from '../../utils/format';
 import RawMaterialReceiptCorrectionModal from '../purchases/RawMaterialReceiptCorrectionModal';
@@ -71,9 +71,14 @@ export default function SuppliersView({
     return (rawMaterialReceipts || []).find(r => r.id === selectedCorrectionReceiptId) || null;
   }, [rawMaterialReceipts, selectedCorrectionReceiptId]);
 
-  const modalLots = React.useMemo(() => {
-    if (!traceabilityData) return rawMaterialLots;
-    const detailedLotsMap = new Map<string, any>();
+  const modalLots = React.useMemo<RawMaterialReceiptCorrectionModalLot[]>(() => {
+    if (!traceabilityData) {
+      return rawMaterialLots.map(lot => ({
+        ...lot,
+        hasProductionUsageHistory: false
+      }));
+    }
+    const detailedLotsMap = new Map<string, SupplierTraceabilityLot>();
     traceabilityData.receipts.forEach(r => {
       if (r.lots) {
         r.lots.forEach(l => {
@@ -83,13 +88,11 @@ export default function SuppliersView({
     });
     return rawMaterialLots.map(lot => {
       const detailed = detailedLotsMap.get(lot.id);
-      if (detailed) {
-        return {
-          ...lot,
-          productionUsages: detailed.productionUsages
-        };
-      }
-      return lot;
+      const hasUsage = detailed ? (!!detailed.productionUsages && detailed.productionUsages.length > 0) : false;
+      return {
+        ...lot,
+        hasProductionUsageHistory: hasUsage
+      };
     });
   }, [rawMaterialLots, traceabilityData]);
 

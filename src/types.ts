@@ -351,6 +351,10 @@ export interface RawMaterialLot {
   updatedAt: string;
 }
 
+export type RawMaterialReceiptCorrectionModalLot = RawMaterialLot & {
+  hasProductionUsageHistory?: boolean;
+};
+
 export interface RawMaterialReceiptLineInput {
   raw_material_id: string;
   quantity: number;
@@ -409,6 +413,7 @@ export interface UpdateRawMaterialReceiptResult {
     kunyeStatus: KunyeStatus;
     kunyeNumber: string | null;
     note: string | null;
+    unitPrice: number;
   }[];
   recalculatedRawMaterials: {
     rawMaterialId: string;
