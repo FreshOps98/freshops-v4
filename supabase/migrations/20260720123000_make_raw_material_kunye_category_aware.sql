@@ -2,7 +2,16 @@
 -- FreshOps Category-Aware Kunye Requirement Migration
 -- ============================================================================
 
--- 1. Normalize existing test data based on category and current rules
+-- 1. Schema Adjustments - Part A (Drop old constraints & make column nullable)
+-- 1.1 Drop existing constraints safely (without CASCADE)
+ALTER TABLE public.raw_material_lots DROP CONSTRAINT IF EXISTS raw_material_lots_kunye_number_not_empty;
+ALTER TABLE public.raw_material_lots DROP CONSTRAINT IF EXISTS raw_material_lots_kunye_status_check;
+ALTER TABLE public.raw_material_lots DROP CONSTRAINT IF EXISTS raw_material_lots_kunye_consistency_check;
+
+-- 1.2 Alter kunye_number column to be nullable
+ALTER TABLE public.raw_material_lots ALTER COLUMN kunye_number DROP NOT NULL;
+
+-- 2. Normalize existing test data based on category and current rules
 -- Match raw_material_lots with raw_materials by id and organization_id.
 -- For lots whose raw material category is NOT 'Meyve' or 'Sebze',
 -- and whose kunye_status is 'internal_placeholder', set kunye_status to 'not_applicable' and kunye_number to NULL.
@@ -15,28 +24,20 @@ WHERE rml.raw_material_id = rm.id
   AND rm.category NOT IN ('Meyve', 'Sebze')
   AND rml.kunye_status = 'internal_placeholder';
 
--- 2. Schema Adjustments
--- 2.1 Drop existing constraints safely (without CASCADE)
-ALTER TABLE public.raw_material_lots DROP CONSTRAINT IF EXISTS raw_material_lots_kunye_number_not_empty;
-ALTER TABLE public.raw_material_lots DROP CONSTRAINT IF EXISTS raw_material_lots_kunye_status_check;
-ALTER TABLE public.raw_material_lots DROP CONSTRAINT IF EXISTS raw_material_lots_kunye_consistency_check;
-
--- 2.2 Alter kunye_number column to be nullable
-ALTER TABLE public.raw_material_lots ALTER COLUMN kunye_number DROP NOT NULL;
-
--- 2.3 Create updated kunye_status check constraint
+-- 3. Schema Adjustments - Part B (Add updated constraints)
+-- 3.1 Create updated kunye_status check constraint
 ALTER TABLE public.raw_material_lots ADD CONSTRAINT raw_material_lots_kunye_status_check CHECK (
   kunye_status IN ('provided', 'internal_placeholder', 'not_applicable')
 );
 
--- 2.4 Create new kunye_consistency_check constraint
+-- 3.2 Create new kunye_consistency_check constraint
 ALTER TABLE public.raw_material_lots ADD CONSTRAINT raw_material_lots_kunye_consistency_check CHECK (
   (kunye_status IN ('provided', 'internal_placeholder') AND kunye_number IS NOT NULL AND TRIM(kunye_number) <> '')
   OR
   (kunye_status = 'not_applicable' AND kunye_number IS NULL)
 );
 
--- 3. Update create_raw_material_receipt_atomic Function
+-- 4. Update create_raw_material_receipt_atomic Function
 CREATE OR REPLACE FUNCTION public.create_raw_material_receipt_atomic(
   p_supplier_id TEXT,
   p_receipt_date DATE,
