@@ -105,8 +105,6 @@ DECLARE
   v_after_materials_json JSONB;
   v_after_state JSONB;
 
-  v_after_receipt_record RECORD;
-
   -- Line Processing Loop Variables
   v_line_idx INT;
   v_line JSONB;
@@ -573,7 +571,13 @@ BEGIN
         AND rml.organization_id = v_org_id
         AND rml.is_deleted = FALSE
         AND rmr.organization_id = v_org_id
-        AND rmr.is_deleted = FALSE;
+        AND rmr.is_deleted = FALSE
+      ORDER BY
+        rmr.receipt_date DESC,
+        rmr.created_at DESC,
+        rml.created_at DESC,
+        rml.id DESC
+      LIMIT 1;
 
       IF v_last_purchase_price IS NULL THEN
         v_last_purchase_price := 0;
@@ -591,23 +595,19 @@ BEGIN
   END IF;
 
   -- 5.12 State Capture: AFTER_STATE (fully multitenant qualified)
-  SELECT row_to_json(r) INTO v_after_receipt_record
-  FROM (
-    SELECT id, supplier_id, receipt_date::TEXT, invoice_number, dispatch_note_number, note, updated_at::TEXT
-    FROM public.raw_material_receipts
-    WHERE id = p_receipt_id
-      AND organization_id = v_org_id
-  ) r;
-
-  v_after_receipt_json := jsonb_build_object(
-    'id', v_after_receipt_record.id,
-    'supplier_id', v_after_receipt_record.supplier_id,
-    'receipt_date', v_after_receipt_record.receipt_date,
-    'invoice_number', v_after_receipt_record.invoice_number,
-    'dispatch_note_number', v_after_receipt_record.dispatch_note_number,
-    'note', v_after_receipt_record.note,
-    'updated_at', v_after_receipt_record.updated_at
-  );
+  SELECT jsonb_build_object(
+    'id', rmr.id,
+    'supplier_id', rmr.supplier_id,
+    'receipt_date', rmr.receipt_date::TEXT,
+    'invoice_number', rmr.invoice_number,
+    'dispatch_note_number', rmr.dispatch_note_number,
+    'note', rmr.note,
+    'updated_at', rmr.updated_at::TEXT
+  )
+  INTO v_after_receipt_json
+  FROM public.raw_material_receipts rmr
+  WHERE rmr.id = p_receipt_id
+    AND rmr.organization_id = v_org_id;
 
   SELECT jsonb_agg(
     jsonb_build_object(
