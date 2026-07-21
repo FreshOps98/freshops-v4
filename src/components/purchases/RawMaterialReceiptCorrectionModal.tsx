@@ -8,7 +8,7 @@ import {
   RawMaterialReceipt, RawMaterialLot, RawMaterial, 
   UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult, 
   RawMaterialReceiptCorrection, KunyeStatus, RawMaterialReceiptCorrectionModalLot,
-  RawMaterialReceiptCorrectionState
+  RawMaterialReceiptCorrectionState, SupplierTraceabilityLot
 } from '../../types';
 import { supabaseDataService } from '../../services/supabaseDataService';
 import { formatCurrency, formatDate } from '../../utils/format';
@@ -84,10 +84,12 @@ export default function RawMaterialReceiptCorrectionModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successResult, setSuccessResult] = useState<UpdateRawMaterialReceiptResult | null>(null);
 
-  const [traceabilityLots, setTraceabilityLots] = useState<Record<string, boolean>>({});
+  const [traceabilityLots, setTraceabilityLots] = useState<Record<string, SupplierTraceabilityLot>>({});
   const [loadingTraceability, setLoadingTraceability] = useState(true);
   const [traceabilityVerified, setTraceabilityVerified] = useState(false);
   const [traceabilityError, setTraceabilityError] = useState<string | null>(null);
+  const [linesIntegrityVerified, setLinesIntegrityVerified] = useState(false);
+  const [isQuantityChangedOnSubmit, setIsQuantityChangedOnSubmit] = useState(false);
 
   // Fetch supplier traceability on open to check for usage history
   useEffect(() => {
@@ -106,12 +108,11 @@ export default function RawMaterialReceiptCorrectionModal({
       try {
         const res = await supabaseDataService.getSupplierTraceabilityAtomic(receipt.supplierId);
         if (res && res.receipts) {
-          const map: Record<string, boolean> = {};
+          const map: Record<string, SupplierTraceabilityLot> = {};
           res.receipts.forEach(r => {
             if (r.lots) {
-              r.lots.forEach(l => {
-                const hasUsage = !!l.productionUsages && l.productionUsages.length > 0;
-                map[l.id] = hasUsage;
+              r.lots.forEach(lot => {
+                map[lot.id] = lot;
               });
             }
           });
@@ -123,7 +124,7 @@ export default function RawMaterialReceiptCorrectionModal({
         }
       } catch (err: unknown) {
         console.error("Error fetching supplier traceability in modal:", err);
-        setTraceabilityError("Hammadde izlenebilirlik geçmişi doğrulanamadı. Güvenlik nedeniyle miktar ve fiyat değişiklikleri kilitlenmiştir. Lütfen sayfayı yenileyip tekrar deneyin.");
+        setTraceabilityError("Lot kullanım geçmişi doğrulanamadı. Güvenlik nedeniyle miktar ve fiyat değişiklikleri kilitlenmiştir. Lütfen sayfayı yenileyip tekrar deneyin.");
         setTraceabilityVerified(false);
       } finally {
         setLoadingTraceability(false);
@@ -138,7 +139,7 @@ export default function RawMaterialReceiptCorrectionModal({
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedCorrectionId, setExpandedCorrectionId] = useState<string | null>(null);
 
-  // Fast mapping for raw material names
+  // Fast mapping for hammadde names
   const rmMap = React.useMemo(() => {
     const map: Record<string, { name: string; category: string; unit: string }> = {};
     rawMaterials.forEach(rm => {
@@ -153,43 +154,31 @@ export default function RawMaterialReceiptCorrectionModal({
   useEffect(() => {
     if (!isOpen) {
       initializedReceiptIdRef.current = null;
+      setLinesIntegrityVerified(false);
+      setIsQuantityChangedOnSubmit(false);
       return;
     }
 
     if (receipt && initializedReceiptIdRef.current !== receipt.id) {
       initializedReceiptIdRef.current = receipt.id;
 
-      // Filter lots for this receipt
-      const receiptLots = lots.filter(lot => lot.rawMaterialReceiptId === receipt.id);
-      
+      // Filter active lots for this receipt using the real typed field isDeleted
+      const activeReceiptLots = lots.filter(lot => lot.rawMaterialReceiptId === receipt.id && lot.isDeleted !== true);
+
       // Ensure no duplicate lot IDs
       const lotIds = new Set<string>();
       let hasDuplicate = false;
-      for (const lot of receiptLots) {
+      for (const lot of activeReceiptLots) {
         if (lotIds.has(lot.id)) {
           hasDuplicate = true;
-          break;
         }
         lotIds.add(lot.id);
       }
 
-      if (hasDuplicate) {
-        setFormError("Kritik Hata: Fişe bağlı mükerrer lot kaydı bulundu. İşleme devam edilemez.");
-        setLines([]);
-        setLineErrors({});
-        setInvoiceNumber('');
-        setDispatchNoteNumber('');
-        setGeneralNote('');
-        setReason('');
-        setSuccessResult(null);
-        setExpandedCorrectionId(null);
-        return;
-      }
-      
-      const initialLines = receiptLots.map(lot => {
+      const initialLines = activeReceiptLots.map(lot => {
         const rm = rawMaterials.find(r => r.id === lot.rawMaterialId);
         const isFruitOrVeg = rm ? (rm.category === 'Meyve' || rm.category === 'Sebze') : false;
-        
+
         return {
           id: lot.id,
           rawMaterialId: lot.rawMaterialId,
@@ -208,16 +197,30 @@ export default function RawMaterialReceiptCorrectionModal({
         };
       });
 
+      // Bütünlük doğrulama kuralları:
+      // 1. Mükerrer lot olmamalı
+      // 2. En az bir aktif lot olmalı
+      // 3. Her aktif lot ID'si lines içinde tam olarak bir kez yer almalı
+      const isIntegrityOk = !hasDuplicate && activeReceiptLots.length > 0 && (activeReceiptLots.length === lotIds.size);
+
       setLines(initialLines);
       setLineErrors({});
       setInvoiceNumber(receipt.invoiceNumber || '');
       setDispatchNoteNumber(receipt.dispatchNoteNumber || '');
       setGeneralNote(receipt.note || '');
       setReason('');
-      setFormError(null);
       setSuccessResult(null);
       setExpandedCorrectionId(null);
-      
+      setIsQuantityChangedOnSubmit(false);
+
+      if (!isIntegrityOk) {
+        setLinesIntegrityVerified(false);
+        setFormError("Kritik Hata: Fişe bağlı hammadde satırları (lotlar) arasında bütünlük hatası var. Bazı satırlar eksik, fazla veya mükerrer. Lütfen sayfayı yenileyip tekrar deneyin.");
+      } else {
+        setLinesIntegrityVerified(true);
+        setFormError(null);
+      }
+
       void fetchCorrections();
     }
   }, [isOpen, receipt, lots, rawMaterials]);
@@ -258,18 +261,32 @@ export default function RawMaterialReceiptCorrectionModal({
     }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) {
+      e.preventDefault();
+    }
     setFormError(null);
     setLineErrors({});
 
-    // 1. Traceability Submit Guard
-    if (isSubmitting || loadingTraceability || !traceabilityVerified) {
+    // Guard Checks
+    if (isSubmitting) return;
+
+    if (loadingTraceability || !traceabilityVerified) {
       if (traceabilityError) {
         setFormError(traceabilityError);
       } else {
         setFormError("Hammadde izlenebilirlik geçmişi doğrulanıyor. Lütfen bekleyin...");
       }
+      return;
+    }
+
+    if (!linesIntegrityVerified) {
+      setFormError("Kritik Hata: Fişe bağlı hammadde satırları (lotlar) arasında bütünlük hatası var. Bazı satırlar eksik, fazla veya mükerrer. Lütfen sayfayı yenileyip tekrar deneyin.");
+      return;
+    }
+
+    if (lines.length === 0) {
+      setFormError("Fişe bağlı hammadde satırı bulunamadı.");
       return;
     }
 
@@ -348,18 +365,30 @@ export default function RawMaterialReceiptCorrectionModal({
       }
     }
 
-    // Ensure no duplicate lot IDs in active submission lines
-    const activeLotIds = new Set<string>();
+    // Verify lines integrity on submit
+    const submitActiveLots = lots.filter(lot => lot.rawMaterialReceiptId === receipt.id && lot.isDeleted !== true);
+    const submitLotIds = new Set(submitActiveLots.map(l => l.id));
+
+    // Check if the lines to be submitted match the active lots exactly and contain no duplicates
+    const activeLotIdsInLines = new Set<string>();
+    let submitHasDuplicate = false;
     for (const line of lines) {
-      if (activeLotIds.has(line.id)) {
-        setFormError("Kritik Hata: Gönderilecek veriler arasında mükerrer lot kaydı bulunuyor.");
-        return;
+      if (activeLotIdsInLines.has(line.id)) {
+        submitHasDuplicate = true;
       }
-      activeLotIds.add(line.id);
+      activeLotIdsInLines.add(line.id);
+    }
+
+    const setsMatch = submitLotIds.size === activeLotIdsInLines.size && [...submitLotIds].every(id => activeLotIdsInLines.has(id));
+
+    if (submitHasDuplicate || !setsMatch || submitActiveLots.length === 0) {
+      setFormError("Kritik Hata: Gönderilecek veriler arasında bütünlük hatası bulunuyor (mükerrer, eksik veya fazla lot). İşlem iptal edildi.");
+      return;
     }
 
     // Change detection logic
     let hasChanges = false;
+    let quantityChanged = false;
 
     // Check header changes
     if (
@@ -377,7 +406,7 @@ export default function RawMaterialReceiptCorrectionModal({
       const originalKunyeStatus = originalLot?.kunyeStatus || (line.isFruitOrVeg ? 'provided' : 'not_applicable');
       const originalKunyeNumber = originalLot?.kunyeNumber || null;
 
-      const hasUsage = line.hasProductionUsageHistory === true || traceabilityLots[line.id] === true;
+      const hasUsage = line.hasProductionUsageHistory === true || (traceabilityLots[line.id]?.productionUsages?.length ?? 0) > 0;
       const isQuantityLocked = Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
 
       const currentPrice = Number(line.unitPrice.trim());
@@ -389,6 +418,10 @@ export default function RawMaterialReceiptCorrectionModal({
       const originalPrice = originalLot?.unitPrice ?? line.unitPriceInitial;
       const originalQty = line.quantityReceivedInitial;
 
+      if (Math.abs(currentQty - originalQty) > 0.0001) {
+        quantityChanged = true;
+      }
+
       if (
         Math.abs(currentPrice - originalPrice) > 0.0001 ||
         Math.abs(currentQty - originalQty) > 0.0001 ||
@@ -397,11 +430,11 @@ export default function RawMaterialReceiptCorrectionModal({
         currentNote !== originalNote
       ) {
         hasChanges = true;
-        break;
       }
     }
 
     if (!hasChanges) {
+      setIsQuantityChangedOnSubmit(false);
       setSuccessResult({
         success: true,
         noChanges: true,
@@ -424,7 +457,7 @@ export default function RawMaterialReceiptCorrectionModal({
         dispatchNoteNumber: dispatchNoteNumber.trim() || null,
         note: generalNote.trim() || null,
         lines: lines.map(line => {
-          const hasUsage = line.hasProductionUsageHistory === true || traceabilityLots[line.id] === true;
+          const hasUsage = line.hasProductionUsageHistory === true || (traceabilityLots[line.id]?.productionUsages?.length ?? 0) > 0;
           const isQuantityLocked = Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
 
           return {
@@ -442,6 +475,7 @@ export default function RawMaterialReceiptCorrectionModal({
       if (result.success === false) {
         setFormError("İşlem başarısız oldu. Güncelleme tamamlanamadı.");
       } else {
+        setIsQuantityChangedOnSubmit(quantityChanged);
         setSuccessResult(result);
       }
     } catch (err: unknown) {
@@ -635,24 +669,19 @@ export default function RawMaterialReceiptCorrectionModal({
               <CheckCircle2 size={36} className="animate-bounce" />
             </div>
             {(() => {
-              const isQuantityCorrected = lines.some(line => {
-                const original = lots.find(l => l.id === line.id);
-                if (!original) return false;
-                return Math.abs(Number(line.quantityReceived.trim()) - original.quantityReceived) > 0.0001;
-              });
               return (
                 <>
                   <h4 className="text-lg font-bold text-slate-800">
                     {successResult.noChanges 
                       ? "Herhangi bir değişiklik bulunmadı" 
-                      : isQuantityCorrected 
+                      : isQuantityChangedOnSubmit 
                         ? "Kabul Miktarı ve Fiş Başarıyla Güncellendi"
-                        : "Satın Alma Fişi Başarıyla Güncellendi"}
+                        : "Fiş Bilgileri Başarıyla Güncellendi"}
                   </h4>
                   <p className="text-xs text-slate-500 max-w-md font-semibold leading-relaxed">
                     {successResult.noChanges 
                       ? "Herhangi bir değişiklik bulunmadı. Düzeltme kaydı oluşturulmadı." 
-                      : isQuantityCorrected
+                      : isQuantityChangedOnSubmit
                         ? "Kabul miktarı ve ilişkili tüm stok bakiye hareketleri başarıyla düzeltildi."
                         : "Satın alma fişi başarıyla güncellendi."}
                   </p>
@@ -692,6 +721,20 @@ export default function RawMaterialReceiptCorrectionModal({
             <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex gap-3 text-xs text-indigo-800 font-semibold items-center animate-pulse">
               <Clock className="text-indigo-500 shrink-0 animate-spin" size={16} />
               <div>Lot kilit ve üretim geçmişi kontrol ediliyor. Lütfen bekleyin...</div>
+            </div>
+          )}
+
+          {traceabilityError && (
+            <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3 text-xs text-rose-800 font-semibold">
+              <AlertTriangle className="text-rose-500 shrink-0 mt-0.5" size={16} />
+              <div>{traceabilityError}</div>
+            </div>
+          )}
+
+          {!linesIntegrityVerified && !loadingTraceability && (
+            <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3 text-xs text-rose-800 font-semibold">
+              <AlertTriangle className="text-rose-500 shrink-0 mt-0.5" size={16} />
+              <div>Kritik Hata: Fişe bağlı hammadde satırları (lotlar) arasında bütünlük hatası var. Bazı satırlar eksik, fazla veya mükerrer. Lütfen sayfayı yenileyip tekrar deneyin.</div>
             </div>
           )}
 
@@ -771,9 +814,9 @@ export default function RawMaterialReceiptCorrectionModal({
             <div className="space-y-4">
               {lines.map((line, index) => {
                 const rmInfo = rmMap[line.rawMaterialId] || { name: 'Bilinmeyen Hammadde', category: 'Diğer', unit: 'kg' };
-                const hasUsage = line.hasProductionUsageHistory === true || traceabilityLots[line.id] === true;
-                const isPriceLocked = loadingTraceability || !traceabilityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
-                const isQuantityLocked = loadingTraceability || !traceabilityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+                const hasUsage = line.hasProductionUsageHistory === true || (traceabilityLots[line.id]?.productionUsages?.length ?? 0) > 0;
+                const isPriceLocked = loadingTraceability || !traceabilityVerified || !linesIntegrityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+                const isQuantityLocked = loadingTraceability || !traceabilityVerified || !linesIntegrityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
 
                 return (
                   <div key={line.id} className="border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-xs hover:border-slate-300 transition-colors">
@@ -816,7 +859,15 @@ export default function RawMaterialReceiptCorrectionModal({
                               <Info size={10} className="shrink-0" />
                               <span>Fiyat kilitli</span>
                             </div>
-                            {hasUsage ? (
+                            {!linesIntegrityVerified ? (
+                              <span className="text-slate-500 font-medium">
+                                Fiş bütünlük hatası nedeniyle kilitlendi.
+                              </span>
+                            ) : !traceabilityVerified ? (
+                              <span className="text-slate-500 font-medium">
+                                Lot kullanım geçmişi doğrulanamadığı için kilitli.
+                              </span>
+                            ) : hasUsage ? (
                               <span className="text-slate-500 font-medium">
                                 Üretimde kullanıldığı için fiyat kilitli.
                               </span>
@@ -862,7 +913,15 @@ export default function RawMaterialReceiptCorrectionModal({
                               <Info size={10} className="shrink-0" />
                               <span>Miktar kilitli</span>
                             </div>
-                            {hasUsage ? (
+                            {!linesIntegrityVerified ? (
+                              <span className="text-slate-500 font-medium">
+                                Fiş bütünlük hatası nedeniyle kilitlendi.
+                              </span>
+                            ) : !traceabilityVerified ? (
+                              <span className="text-slate-500 font-medium">
+                                Lot kullanım geçmişi doğrulanamadığı için kilitli.
+                              </span>
+                            ) : hasUsage ? (
                               <span className="text-slate-500 font-medium">
                                 Aktif veya geri alınmış üretim geçmişi nedeniyle miktar kilitli.
                               </span>
@@ -1011,7 +1070,7 @@ export default function RawMaterialReceiptCorrectionModal({
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isSubmitting || loadingTraceability}
+              disabled={isSubmitting || loadingTraceability || !traceabilityVerified || !linesIntegrityVerified}
               className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 disabled:bg-indigo-400 flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               {isSubmitting ? (

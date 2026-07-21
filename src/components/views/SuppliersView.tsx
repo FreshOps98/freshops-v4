@@ -482,6 +482,9 @@ export default function SuppliersView({
                                 onClick={() => {
                                   setSelectedCorrectionReceiptId(receipt.id);
                                   setIsCorrectionModalOpen(true);
+                                  if (selectedSupplierId) {
+                                    void fetchTraceability(selectedSupplierId);
+                                  }
                                 }}
                                 className="inline-flex items-center gap-1 bg-white hover:bg-slate-100 text-indigo-700 hover:text-indigo-800 px-2 py-0.5 rounded border border-slate-200 text-[10px] font-bold transition-colors cursor-pointer"
                               >

@@ -442,21 +442,31 @@ export interface RawMaterialReceiptCorrectionState {
     kunye_status: KunyeStatus;
     kunye_number: string | null;
     note: string | null;
-    updated_at: string;
-    quantity_received?: number;
-    quantity_remaining?: number;
+    quantity_received: number;
+    quantity_remaining: number;
+    inbound_stock_movement_id?: string;
   }[];
-  movements: {
+  stock_movements: {
     id: string;
     raw_material_id: string;
+    movement_type: string;
+    quantity: number;
     unit_price: number;
     total_cost: number;
+    previous_stock: number;
+    new_stock: number;
+    movement_date: string;
+    created_at: string;
+    source_type: string;
+    source_id: string;
     note: string | null;
+    is_deleted: boolean;
   }[];
   raw_materials: {
     id: string;
     purchase_price: number;
     average_cost: number;
+    current_stock?: number;
   }[];
 }
 

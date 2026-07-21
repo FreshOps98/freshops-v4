@@ -1555,23 +1555,27 @@ export default function App() {
           return result;
         }
         
-        // Refresh all relevant states on success
-        const [rmList, smList, supList, recList, lotList] = await Promise.all([
-          supabaseDataService.getRawMaterials(),
-          supabaseDataService.getStockMovements(),
-          supabaseDataService.getSuppliers(),
-          supabaseDataService.getRawMaterialReceipts(),
-          supabaseDataService.getRawMaterialLots()
-        ]);
+        // Refresh all relevant states on success without blocking the result
+        try {
+          const [rmList, smList, supList, recList, lotList] = await Promise.all([
+            supabaseDataService.getRawMaterials(),
+            supabaseDataService.getStockMovements(),
+            supabaseDataService.getSuppliers(),
+            supabaseDataService.getRawMaterialReceipts(),
+            supabaseDataService.getRawMaterialLots()
+          ]);
 
-        setRawMaterials(rmList.map(item => ({
-          ...item,
-          averageCost: typeof item.averageCost === 'number' ? item.averageCost : (item.averageCost ?? item.purchasePrice ?? 0)
-        })));
-        setStockMovements(smList);
-        setSuppliers(supList);
-        setRawMaterialReceipts(recList);
-        setRawMaterialLots(lotList);
+          setRawMaterials(rmList.map(item => ({
+            ...item,
+            averageCost: typeof item.averageCost === 'number' ? item.averageCost : (item.averageCost ?? item.purchasePrice ?? 0)
+          })));
+          setStockMovements(smList);
+          setSuppliers(supList);
+          setRawMaterialReceipts(recList);
+          setRawMaterialLots(lotList);
+        } catch (refreshErr: unknown) {
+          console.error("Error refreshing state after successful updateRawMaterialReceiptAtomic:", refreshErr);
+        }
 
         return result;
       } catch (err: unknown) {
