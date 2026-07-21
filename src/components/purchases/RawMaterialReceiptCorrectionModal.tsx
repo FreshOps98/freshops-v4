@@ -264,6 +264,18 @@ export default function RawMaterialReceiptCorrectionModal({
     }
   };
 
+  const handleModalClose = () => {
+    if (isSubmitting) return;
+    if (successResult) {
+      if (successResult.success && successResult.noChanges === false) {
+        onSuccess?.();
+      }
+      setSuccessResult(null);
+    }
+    onClose();
+  };
+
+
   // Difference calculator for change logs
   const renderChangeLog = (correction: RawMaterialReceiptCorrection) => {
     const before = correction.beforeState;
@@ -404,7 +416,7 @@ export default function RawMaterialReceiptCorrectionModal({
           </div>
           <button 
             type="button" 
-            onClick={onClose} 
+            onClick={handleModalClose} 
             disabled={isSubmitting}
             className={`p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ${isSubmitting ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
           >
@@ -444,11 +456,7 @@ export default function RawMaterialReceiptCorrectionModal({
             <div className="pt-4">
               <button
                 type="button"
-                onClick={() => {
-                  onSuccess?.();
-                  onClose();
-                  setSuccessResult(null);
-                }}
+                onClick={handleModalClose}
                 className="px-6 py-3 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 shadow-md shadow-indigo-200 transition-all active:scale-95 cursor-pointer"
               >
                 Kapat ve Listeyi Yenile
@@ -696,7 +704,7 @@ export default function RawMaterialReceiptCorrectionModal({
           <div className="flex gap-3">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleModalClose}
               disabled={isSubmitting}
               className="px-4.5 py-2.5 border border-slate-200 text-xs font-bold rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50 transition-colors cursor-pointer"
             >
