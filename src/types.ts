@@ -409,6 +409,7 @@ export interface UpdateRawMaterialReceiptResult {
   receiptId: string;
   updatedAt: string;
   correctionId: string | null;
+  partialRefreshError?: boolean;
   updatedLots: {
     lotId: string;
     kunyeStatus: KunyeStatus;
@@ -437,20 +438,22 @@ export interface RawMaterialReceiptCorrectionState {
   };
   lots: {
     id: string;
+    internal_lot_no: string;
     raw_material_id: string;
-    unit_price: number;
     kunye_status: KunyeStatus;
     kunye_number: string | null;
-    note: string | null;
+    unit_price: number;
     quantity_received: number;
     quantity_remaining: number;
-    inbound_stock_movement_id?: string;
+    note: string | null;
+    inbound_stock_movement_id: string | null;
   }[];
   stock_movements: {
     id: string;
     raw_material_id: string;
     movement_type: string;
     quantity: number;
+    difference: number;
     unit_price: number;
     total_cost: number;
     previous_stock: number;
@@ -458,7 +461,7 @@ export interface RawMaterialReceiptCorrectionState {
     movement_date: string;
     created_at: string;
     source_type: string;
-    source_id: string;
+    source_id: string | null;
     note: string | null;
     is_deleted: boolean;
   }[];
@@ -466,7 +469,7 @@ export interface RawMaterialReceiptCorrectionState {
     id: string;
     purchase_price: number;
     average_cost: number;
-    current_stock?: number;
+    current_stock: number;
   }[];
 }
 

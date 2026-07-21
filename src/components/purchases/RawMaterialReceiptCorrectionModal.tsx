@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  X, AlertTriangle, Save, Clock, History, FileText, CheckCircle2, 
+import {
+  X, AlertTriangle, Save, Clock, History, FileText, CheckCircle2,
   ArrowRight, MessageSquare, Info, ChevronDown, ChevronUp, DollarSign
 } from 'lucide-react';
-import { 
-  RawMaterialReceipt, RawMaterialLot, RawMaterial, 
-  UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult, 
+import {
+  RawMaterialReceipt, RawMaterialLot, RawMaterial,
+  UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult,
   RawMaterialReceiptCorrection, KunyeStatus, RawMaterialReceiptCorrectionModalLot,
   RawMaterialReceiptCorrectionState, SupplierTraceabilityLot
 } from '../../types';
@@ -78,7 +78,6 @@ export default function RawMaterialReceiptCorrectionModal({
   const [dispatchNoteNumber, setDispatchNoteNumber] = useState('');
   const [generalNote, setGeneralNote] = useState('');
   const [reason, setReason] = useState('');
-  
   const [formError, setFormError] = useState<string | null>(null);
   const [lineErrors, setLineErrors] = useState<Record<string, { price?: string; quantity?: string; kunye?: string }>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -249,12 +248,12 @@ export default function RawMaterialReceiptCorrectionModal({
     setLines(prev => prev.map(line => {
       if (line.id === lotId) {
         const updated = { ...line, [field]: value };
-        
+
         // If status changed to 'not_applicable', clear kunyeNumber
         if (field === 'kunyeStatus' && (value as unknown) === 'not_applicable') {
           updated.kunyeNumber = null;
         }
-        
+
         return updated;
       }
       return line;
@@ -635,7 +634,7 @@ export default function RawMaterialReceiptCorrectionModal({
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
@@ -653,9 +652,9 @@ export default function RawMaterialReceiptCorrectionModal({
             </div>
             <h3 className="font-bold text-base mt-1 text-white">Satın Alma Fişi & Fatura Güvenli Düzenleme</h3>
           </div>
-          <button 
-            type="button" 
-            onClick={handleModalClose} 
+          <button
+            type="button"
+            onClick={handleModalClose}
             disabled={isSubmitting}
             className={`p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ${isSubmitting ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
           >
@@ -672,15 +671,15 @@ export default function RawMaterialReceiptCorrectionModal({
               return (
                 <>
                   <h4 className="text-lg font-bold text-slate-800">
-                    {successResult.noChanges 
-                      ? "Herhangi bir değişiklik bulunmadı" 
-                      : isQuantityChangedOnSubmit 
+                    {successResult.noChanges
+                      ? "Herhangi bir değişiklik bulunmadı"
+                      : isQuantityChangedOnSubmit
                         ? "Kabul Miktarı ve Fiş Başarıyla Güncellendi"
                         : "Fiş Bilgileri Başarıyla Güncellendi"}
                   </h4>
                   <p className="text-xs text-slate-500 max-w-md font-semibold leading-relaxed">
-                    {successResult.noChanges 
-                      ? "Herhangi bir değişiklik bulunmadı. Düzeltme kaydı oluşturulmadı." 
+                    {successResult.noChanges
+                      ? "Herhangi bir değişiklik bulunmadı. Düzeltme kaydı oluşturulmadı."
                       : isQuantityChangedOnSubmit
                         ? "Kabul miktarı ve ilişkili tüm stok bakiye hareketleri başarıyla düzeltildi."
                         : "Satın alma fişi başarıyla güncellendi."}
@@ -688,7 +687,7 @@ export default function RawMaterialReceiptCorrectionModal({
                 </>
               );
             })()}
-            
+
             {!successResult.noChanges && successResult.correctionId && (
               <div className="bg-white border border-slate-200/80 rounded-2xl p-4 w-full max-w-md text-left space-y-2.5 shadow-xs font-sans mt-2">
                 <div className="flex justify-between text-xs items-center">
@@ -701,7 +700,14 @@ export default function RawMaterialReceiptCorrectionModal({
                 </div>
               </div>
             )}
-            
+
+            {successResult.partialRefreshError && (
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex gap-3 text-xs text-amber-800 font-semibold max-w-md text-left mt-2 shadow-xs">
+                <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={16} />
+                <div>Fiş başarıyla kaydedildi ancak ekran verilerinin bir kısmı yenilenemedi. Lütfen sayfayı yenileyin.</div>
+              </div>
+            )}
+
             <div className="pt-4">
               <button
                 type="button"
@@ -716,7 +722,7 @@ export default function RawMaterialReceiptCorrectionModal({
           <>
             {/* Form Body */}
             <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
-          
+
           {loadingTraceability && (
             <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex gap-3 text-xs text-indigo-800 font-semibold items-center animate-pulse">
               <Clock className="text-indigo-500 shrink-0 animate-spin" size={16} />
@@ -847,8 +853,8 @@ export default function RawMaterialReceiptCorrectionModal({
                             onChange={(e) => handleLineFieldChange(line.id, 'unitPrice', e.target.value)}
                             placeholder="0.0000"
                             className={`w-full px-3 py-1.5 rounded-xl border text-xs font-bold focus:outline-none focus:border-indigo-500 ${
-                              isPriceLocked 
-                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' 
+                              isPriceLocked
+                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                                 : 'bg-white text-slate-800 border-slate-200'
                             }`}
                           />
@@ -898,8 +904,8 @@ export default function RawMaterialReceiptCorrectionModal({
                             onChange={(e) => handleLineFieldChange(line.id, 'quantityReceived', e.target.value)}
                             placeholder="0.00"
                             className={`w-full pr-10 px-3 py-1.5 rounded-xl border text-xs font-bold focus:outline-none focus:border-indigo-500 ${
-                              isQuantityLocked 
-                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' 
+                              isQuantityLocked
+                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                                 : 'bg-white text-slate-800 border-slate-200'
                             }`}
                           />
@@ -1017,7 +1023,7 @@ export default function RawMaterialReceiptCorrectionModal({
                   const isExpanded = expandedCorrectionId === corr.id;
                   return (
                     <div key={corr.id} className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/40">
-                      <div 
+                      <div
                         onClick={() => setExpandedCorrectionId(isExpanded ? null : corr.id)}
                         className="p-4 flex items-center justify-between gap-4 cursor-pointer hover:bg-slate-50 transition-colors"
                       >

@@ -1556,8 +1556,9 @@ export default function App() {
         }
         
         // Refresh all relevant states on success without blocking the result
+        let partialRefreshError = false;
         try {
-          const [rmList, smList, supList, recList, lotList] = await Promise.all([
+          const results = await Promise.allSettled([
             supabaseDataService.getRawMaterials(),
             supabaseDataService.getStockMovements(),
             supabaseDataService.getSuppliers(),
@@ -1565,19 +1566,55 @@ export default function App() {
             supabaseDataService.getRawMaterialLots()
           ]);
 
-          setRawMaterials(rmList.map(item => ({
-            ...item,
-            averageCost: typeof item.averageCost === 'number' ? item.averageCost : (item.averageCost ?? item.purchasePrice ?? 0)
-          })));
-          setStockMovements(smList);
-          setSuppliers(supList);
-          setRawMaterialReceipts(recList);
-          setRawMaterialLots(lotList);
+          const [rmRes, smRes, supRes, recRes, lotRes] = results;
+
+          if (rmRes.status === 'fulfilled') {
+            const rmList = rmRes.value;
+            setRawMaterials(rmList.map(item => ({
+              ...item,
+              averageCost: typeof item.averageCost === 'number' ? item.averageCost : (item.averageCost ?? item.purchasePrice ?? 0)
+            })));
+          } else {
+            partialRefreshError = true;
+            console.error("Error refreshing rawMaterials:", rmRes.reason);
+          }
+
+          if (smRes.status === 'fulfilled') {
+            setStockMovements(smRes.value);
+          } else {
+            partialRefreshError = true;
+            console.error("Error refreshing stockMovements:", smRes.reason);
+          }
+
+          if (supRes.status === 'fulfilled') {
+            setSuppliers(supRes.value);
+          } else {
+            partialRefreshError = true;
+            console.error("Error refreshing suppliers:", supRes.reason);
+          }
+
+          if (recRes.status === 'fulfilled') {
+            setRawMaterialReceipts(recRes.value);
+          } else {
+            partialRefreshError = true;
+            console.error("Error refreshing rawMaterialReceipts:", recRes.reason);
+          }
+
+          if (lotRes.status === 'fulfilled') {
+            setRawMaterialLots(lotRes.value);
+          } else {
+            partialRefreshError = true;
+            console.error("Error refreshing rawMaterialLots:", lotRes.reason);
+          }
         } catch (refreshErr: unknown) {
           console.error("Error refreshing state after successful updateRawMaterialReceiptAtomic:", refreshErr);
+          partialRefreshError = true;
         }
 
-        return result;
+        return {
+          ...result,
+          partialRefreshError
+        };
       } catch (err: unknown) {
         console.error("Error in updateRawMaterialReceiptAtomic:", err);
         throw err;
