@@ -329,13 +329,13 @@ export default function RawMaterialReceiptCorrectionModal({
       const rawPrice = line.unitPrice.trim();
       if (rawPrice === "") {
         errors.price = "Birim fiyat boş bırakılamaz.";
-        setFormError(`"${rmInfo.name}" için birim fiyat boş bırakılamaz.`);
+        setFormError("Birim fiyat boş bırakılamaz.");
         hasLineErrors = true;
       } else {
         const parsedPrice = Number(rawPrice);
-        if (isNaN(parsedPrice) || !isFinite(parsedPrice) || parsedPrice < 0) {
-          errors.price = "Birim fiyat sıfır veya pozitif geçerli bir sayı olmalıdır.";
-          setFormError(`"${rmInfo.name}" için birim fiyat sıfır veya pozitif geçerli bir sayı olmalıdır.`);
+        if (isNaN(parsedPrice) || !isFinite(parsedPrice) || parsedPrice <= 0) {
+          errors.price = "Birim fiyat 0’dan büyük olmalıdır.";
+          setFormError("Birim fiyat 0’dan büyük olmalıdır.");
           hasLineErrors = true;
         }
       }
