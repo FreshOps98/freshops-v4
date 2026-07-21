@@ -387,6 +387,7 @@ export interface CreateOrGetSupplierResult {
 export interface UpdateRawMaterialReceiptLineInput {
   lotId: string;
   unitPrice: number;
+  quantityReceived: number;
   kunyeStatus: KunyeStatus;
   kunyeNumber: string | null;
   note?: string | null;
@@ -414,6 +415,8 @@ export interface UpdateRawMaterialReceiptResult {
     kunyeNumber: string | null;
     note: string | null;
     unitPrice: number;
+    quantityReceived: number;
+    quantityRemaining: number;
   }[];
   recalculatedRawMaterials: {
     rawMaterialId: string;
@@ -440,6 +443,8 @@ export interface RawMaterialReceiptCorrectionState {
     kunye_number: string | null;
     note: string | null;
     updated_at: string;
+    quantity_received?: number;
+    quantity_remaining?: number;
   }[];
   movements: {
     id: string;

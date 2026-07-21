@@ -27,15 +27,17 @@ interface EditableLine {
   id: string;
   rawMaterialId: string;
   internalLotNo: string;
-  quantityReceived: number;
+  quantityReceived: string;
+  quantityReceivedInitial: number;
   quantityRemaining: number;
   unit: string;
   unitPrice: string;
+  unitPriceInitial: number;
   kunyeStatus: KunyeStatus;
   kunyeNumber: string | null;
   note: string;
   isFruitOrVeg: boolean;
-  isPriceLocked: boolean;
+  hasProductionUsageHistory: boolean;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -78,8 +80,58 @@ export default function RawMaterialReceiptCorrectionModal({
   const [reason, setReason] = useState('');
   
   const [formError, setFormError] = useState<string | null>(null);
+  const [lineErrors, setLineErrors] = useState<Record<string, { price?: string; quantity?: string; kunye?: string }>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successResult, setSuccessResult] = useState<UpdateRawMaterialReceiptResult | null>(null);
+
+  const [traceabilityLots, setTraceabilityLots] = useState<Record<string, boolean>>({});
+  const [loadingTraceability, setLoadingTraceability] = useState(true);
+  const [traceabilityVerified, setTraceabilityVerified] = useState(false);
+  const [traceabilityError, setTraceabilityError] = useState<string | null>(null);
+
+  // Fetch supplier traceability on open to check for usage history
+  useEffect(() => {
+    if (!isOpen || !receipt) {
+      setTraceabilityLots({});
+      setLoadingTraceability(false);
+      setTraceabilityVerified(false);
+      setTraceabilityError(null);
+      return;
+    }
+
+    const loadTraceability = async () => {
+      setLoadingTraceability(true);
+      setTraceabilityVerified(false);
+      setTraceabilityError(null);
+      try {
+        const res = await supabaseDataService.getSupplierTraceabilityAtomic(receipt.supplierId);
+        if (res && res.receipts) {
+          const map: Record<string, boolean> = {};
+          res.receipts.forEach(r => {
+            if (r.lots) {
+              r.lots.forEach(l => {
+                const hasUsage = !!l.productionUsages && l.productionUsages.length > 0;
+                map[l.id] = hasUsage;
+              });
+            }
+          });
+          setTraceabilityLots(map);
+          setTraceabilityVerified(true);
+        } else {
+          setTraceabilityLots({});
+          setTraceabilityVerified(true);
+        }
+      } catch (err: unknown) {
+        console.error("Error fetching supplier traceability in modal:", err);
+        setTraceabilityError("Hammadde izlenebilirlik geçmişi doğrulanamadı. Güvenlik nedeniyle miktar ve fiyat değişiklikleri kilitlenmiştir. Lütfen sayfayı yenileyip tekrar deneyin.");
+        setTraceabilityVerified(false);
+      } finally {
+        setLoadingTraceability(false);
+      }
+    };
+
+    void loadTraceability();
+  }, [isOpen, receipt]);
 
   // History State
   const [corrections, setCorrections] = useState<RawMaterialReceiptCorrection[]>([]);
@@ -110,28 +162,54 @@ export default function RawMaterialReceiptCorrectionModal({
       // Filter lots for this receipt
       const receiptLots = lots.filter(lot => lot.rawMaterialReceiptId === receipt.id);
       
+      // Ensure no duplicate lot IDs
+      const lotIds = new Set<string>();
+      let hasDuplicate = false;
+      for (const lot of receiptLots) {
+        if (lotIds.has(lot.id)) {
+          hasDuplicate = true;
+          break;
+        }
+        lotIds.add(lot.id);
+      }
+
+      if (hasDuplicate) {
+        setFormError("Kritik Hata: Fişe bağlı mükerrer lot kaydı bulundu. İşleme devam edilemez.");
+        setLines([]);
+        setLineErrors({});
+        setInvoiceNumber('');
+        setDispatchNoteNumber('');
+        setGeneralNote('');
+        setReason('');
+        setSuccessResult(null);
+        setExpandedCorrectionId(null);
+        return;
+      }
+      
       const initialLines = receiptLots.map(lot => {
         const rm = rawMaterials.find(r => r.id === lot.rawMaterialId);
         const isFruitOrVeg = rm ? (rm.category === 'Meyve' || rm.category === 'Sebze') : false;
-        const isPriceLocked = Math.abs(lot.quantityRemaining - lot.quantityReceived) > 0.0001 || lot.hasProductionUsageHistory === true;
         
         return {
           id: lot.id,
           rawMaterialId: lot.rawMaterialId,
           internalLotNo: lot.internalLotNo,
-          quantityReceived: lot.quantityReceived,
+          quantityReceived: lot.quantityReceived.toString(),
+          quantityReceivedInitial: lot.quantityReceived,
           quantityRemaining: lot.quantityRemaining,
           unit: lot.unit,
           unitPrice: lot.unitPrice.toString(),
+          unitPriceInitial: lot.unitPrice,
           kunyeStatus: lot.kunyeStatus || (isFruitOrVeg ? 'provided' : 'not_applicable'),
           kunyeNumber: lot.kunyeNumber,
           note: lot.note || '',
           isFruitOrVeg,
-          isPriceLocked
+          hasProductionUsageHistory: lot.hasProductionUsageHistory === true
         };
       });
 
       setLines(initialLines);
+      setLineErrors({});
       setInvoiceNumber(receipt.invoiceNumber || '');
       setDispatchNoteNumber(receipt.dispatchNoteNumber || '');
       setGeneralNote(receipt.note || '');
@@ -183,8 +261,19 @@ export default function RawMaterialReceiptCorrectionModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+    setLineErrors({});
 
-    // Validations
+    // 1. Traceability Submit Guard
+    if (isSubmitting || loadingTraceability || !traceabilityVerified) {
+      if (traceabilityError) {
+        setFormError(traceabilityError);
+      } else {
+        setFormError("Hammadde izlenebilirlik geçmişi doğrulanıyor. Lütfen bekleyin...");
+      }
+      return;
+    }
+
+    // 2. Base Validations
     if (!reason.trim()) {
       setFormError("Düzeltme gerekçesi girmek zorunludur. Lütfen geçerli bir neden girin.");
       return;
@@ -195,36 +284,134 @@ export default function RawMaterialReceiptCorrectionModal({
       return;
     }
 
+    const newLineErrors: Record<string, { price?: string; quantity?: string; kunye?: string }> = {};
+    let hasLineErrors = false;
+
     // Line validations
     for (const line of lines) {
       const rmInfo = rmMap[line.rawMaterialId] || { name: 'Bilinmeyen Hammadde', category: '' };
-      
+      const errors: { price?: string; quantity?: string; kunye?: string } = {};
+
       if (line.isFruitOrVeg) {
         if (line.kunyeStatus === 'not_applicable') {
+          errors.kunye = "Meyve/Sebze kategorisindeki hammadde için Künye Durumu 'Künye Yok' olamaz.";
           setFormError(`"${rmInfo.name}" Meyve/Sebze kategorisindedir, dolayısıyla Künye Durumu 'Künye Yok' olamaz.`);
-          return;
-        }
-        if (!line.kunyeNumber || !line.kunyeNumber.trim()) {
+          hasLineErrors = true;
+        } else if (!line.kunyeNumber || !line.kunyeNumber.trim()) {
+          errors.kunye = "Meyve/Sebze için künye numarası girilmesi zorunludur.";
           setFormError(`"${rmInfo.name}" (Meyve/Sebze) için künye numarası girilmesi zorunludur.`);
-          return;
+          hasLineErrors = true;
         }
       } else {
         if (line.kunyeStatus !== 'not_applicable' && (!line.kunyeNumber || !line.kunyeNumber.trim())) {
+          errors.kunye = "Künye numarası zorunludur veya künye durumu 'Künye Yok' seçilmelidir.";
           setFormError(`"${rmInfo.name}" için künye numarası girilmesi zorunludur veya künye durumu 'Künye Yok' seçilmelidir.`);
-          return;
+          hasLineErrors = true;
         }
       }
 
       const rawPrice = line.unitPrice.trim();
       if (rawPrice === "") {
+        errors.price = "Birim fiyat boş bırakılamaz.";
         setFormError(`"${rmInfo.name}" için birim fiyat boş bırakılamaz.`);
+        hasLineErrors = true;
+      } else {
+        const parsedPrice = Number(rawPrice);
+        if (isNaN(parsedPrice) || !isFinite(parsedPrice) || parsedPrice < 0) {
+          errors.price = "Birim fiyat sıfır veya pozitif geçerli bir sayı olmalıdır.";
+          setFormError(`"${rmInfo.name}" için birim fiyat sıfır veya pozitif geçerli bir sayı olmalıdır.`);
+          hasLineErrors = true;
+        }
+      }
+
+      const rawQty = line.quantityReceived.trim();
+      if (rawQty === "") {
+        errors.quantity = "Kabul miktarı boş bırakılamaz.";
+        setFormError(`"${rmInfo.name}" için kabul miktarı boş bırakılamaz.`);
+        hasLineErrors = true;
+      } else {
+        const parsedQty = Number(rawQty);
+        if (isNaN(parsedQty) || !isFinite(parsedQty) || parsedQty <= 0) {
+          errors.quantity = "Kabul miktarı sıfırdan büyük geçerli bir sayı olmalıdır.";
+          setFormError(`"${rmInfo.name}" için kabul miktarı sıfırdan büyük geçerli bir sayı olmalıdır.`);
+          hasLineErrors = true;
+        }
+      }
+
+      if (Object.keys(errors).length > 0) {
+        newLineErrors[line.id] = errors;
+      }
+
+      if (hasLineErrors) {
+        setLineErrors(newLineErrors);
         return;
       }
-      const parsedPrice = Number(rawPrice);
-      if (isNaN(parsedPrice) || !isFinite(parsedPrice) || parsedPrice < 0) {
-        setFormError(`"${rmInfo.name}" için birim fiyat sıfır veya pozitif geçerli bir sayı olmalıdır.`);
+    }
+
+    // Ensure no duplicate lot IDs in active submission lines
+    const activeLotIds = new Set<string>();
+    for (const line of lines) {
+      if (activeLotIds.has(line.id)) {
+        setFormError("Kritik Hata: Gönderilecek veriler arasında mükerrer lot kaydı bulunuyor.");
         return;
       }
+      activeLotIds.add(line.id);
+    }
+
+    // Change detection logic
+    let hasChanges = false;
+
+    // Check header changes
+    if (
+      invoiceNumber.trim() !== (receipt.invoiceNumber || '') ||
+      dispatchNoteNumber.trim() !== (receipt.dispatchNoteNumber || '') ||
+      generalNote.trim() !== (receipt.note || '')
+    ) {
+      hasChanges = true;
+    }
+
+    // Check line changes
+    for (const line of lines) {
+      const originalLot = lots.find(l => l.id === line.id);
+      const originalNote = originalLot?.note || '';
+      const originalKunyeStatus = originalLot?.kunyeStatus || (line.isFruitOrVeg ? 'provided' : 'not_applicable');
+      const originalKunyeNumber = originalLot?.kunyeNumber || null;
+
+      const hasUsage = line.hasProductionUsageHistory === true || traceabilityLots[line.id] === true;
+      const isQuantityLocked = Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+
+      const currentPrice = Number(line.unitPrice.trim());
+      const currentQty = isQuantityLocked ? line.quantityReceivedInitial : Number(line.quantityReceived.trim());
+      const currentKunyeStatus = line.kunyeStatus;
+      const currentKunyeNumber = line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber?.trim() || null);
+      const currentNote = line.note.trim();
+
+      const originalPrice = originalLot?.unitPrice ?? line.unitPriceInitial;
+      const originalQty = line.quantityReceivedInitial;
+
+      if (
+        Math.abs(currentPrice - originalPrice) > 0.0001 ||
+        Math.abs(currentQty - originalQty) > 0.0001 ||
+        currentKunyeStatus !== originalKunyeStatus ||
+        currentKunyeNumber !== originalKunyeNumber ||
+        currentNote !== originalNote
+      ) {
+        hasChanges = true;
+        break;
+      }
+    }
+
+    if (!hasChanges) {
+      setSuccessResult({
+        success: true,
+        noChanges: true,
+        receiptId: receipt.id,
+        updatedAt: receipt.updatedAt,
+        correctionId: null,
+        updatedLots: [],
+        recalculatedRawMaterials: []
+      });
+      return;
     }
 
     setIsSubmitting(true);
@@ -236,13 +423,19 @@ export default function RawMaterialReceiptCorrectionModal({
         invoiceNumber: invoiceNumber.trim() || null,
         dispatchNoteNumber: dispatchNoteNumber.trim() || null,
         note: generalNote.trim() || null,
-        lines: lines.map(line => ({
-          lotId: line.id,
-          unitPrice: Number(line.unitPrice.trim()),
-          kunyeStatus: line.kunyeStatus,
-          kunyeNumber: line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber?.trim() || null),
-          note: line.note.trim() || null
-        }))
+        lines: lines.map(line => {
+          const hasUsage = line.hasProductionUsageHistory === true || traceabilityLots[line.id] === true;
+          const isQuantityLocked = Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+
+          return {
+            lotId: line.id,
+            unitPrice: Number(line.unitPrice.trim()),
+            quantityReceived: isQuantityLocked ? line.quantityReceivedInitial : Number(line.quantityReceived.trim()),
+            kunyeStatus: line.kunyeStatus,
+            kunyeNumber: line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber?.trim() || null),
+            note: line.note.trim() || null
+          };
+        })
       };
 
       const result = await onUpdateReceipt(payload);
@@ -340,6 +533,18 @@ export default function RawMaterialReceiptCorrectionModal({
         );
       }
 
+      const qtyBefore = beforeLine.quantity_received;
+      const qtyAfter = afterLine.quantity_received;
+      if (qtyBefore !== undefined && qtyAfter !== undefined && Math.abs(qtyBefore - qtyAfter) > 0.0001) {
+        lineChanges.push(
+          <span key="quantity" className="inline-flex items-center gap-1">
+            Kabul Miktarı: <span className="line-through text-red-400">{qtyBefore} {rmInfo.unit || ''}</span>
+            <ArrowRight size={10} />
+            <span className="text-emerald-600 font-bold">{qtyAfter} {rmInfo.unit || ''}</span>
+          </span>
+        );
+      }
+
       if (beforeLine.kunye_number !== afterLine.kunye_number) {
         lineChanges.push(
           <span key="kunye" className="inline-flex items-center gap-1">
@@ -429,16 +634,31 @@ export default function RawMaterialReceiptCorrectionModal({
             <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-600 shadow-sm border border-emerald-100">
               <CheckCircle2 size={36} className="animate-bounce" />
             </div>
-            <h4 className="text-lg font-bold text-slate-800">
-              {successResult.noChanges 
-                ? "Herhangi bir değişiklik bulunmadı" 
-                : "Satın Alma Fişi Başarıyla Güncellendi"}
-            </h4>
-            <p className="text-xs text-slate-500 max-w-md font-semibold leading-relaxed">
-              {successResult.noChanges 
-                ? "Herhangi bir değişiklik bulunmadı. Düzeltme kaydı oluşturulmadı." 
-                : "Satın alma fişi başarıyla güncellendi."}
-            </p>
+            {(() => {
+              const isQuantityCorrected = lines.some(line => {
+                const original = lots.find(l => l.id === line.id);
+                if (!original) return false;
+                return Math.abs(Number(line.quantityReceived.trim()) - original.quantityReceived) > 0.0001;
+              });
+              return (
+                <>
+                  <h4 className="text-lg font-bold text-slate-800">
+                    {successResult.noChanges 
+                      ? "Herhangi bir değişiklik bulunmadı" 
+                      : isQuantityCorrected 
+                        ? "Kabul Miktarı ve Fiş Başarıyla Güncellendi"
+                        : "Satın Alma Fişi Başarıyla Güncellendi"}
+                  </h4>
+                  <p className="text-xs text-slate-500 max-w-md font-semibold leading-relaxed">
+                    {successResult.noChanges 
+                      ? "Herhangi bir değişiklik bulunmadı. Düzeltme kaydı oluşturulmadı." 
+                      : isQuantityCorrected
+                        ? "Kabul miktarı ve ilişkili tüm stok bakiye hareketleri başarıyla düzeltildi."
+                        : "Satın alma fişi başarıyla güncellendi."}
+                  </p>
+                </>
+              );
+            })()}
             
             {!successResult.noChanges && successResult.correctionId && (
               <div className="bg-white border border-slate-200/80 rounded-2xl p-4 w-full max-w-md text-left space-y-2.5 shadow-xs font-sans mt-2">
@@ -468,6 +688,13 @@ export default function RawMaterialReceiptCorrectionModal({
             {/* Form Body */}
             <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
           
+          {loadingTraceability && (
+            <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex gap-3 text-xs text-indigo-800 font-semibold items-center animate-pulse">
+              <Clock className="text-indigo-500 shrink-0 animate-spin" size={16} />
+              <div>Lot kilit ve üretim geçmişi kontrol ediliyor. Lütfen bekleyin...</div>
+            </div>
+          )}
+
           {formError && (
             <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3 text-xs text-rose-800 font-semibold animate-pulse">
               <AlertTriangle className="text-rose-500 shrink-0 mt-0.5" size={16} />
@@ -544,6 +771,10 @@ export default function RawMaterialReceiptCorrectionModal({
             <div className="space-y-4">
               {lines.map((line, index) => {
                 const rmInfo = rmMap[line.rawMaterialId] || { name: 'Bilinmeyen Hammadde', category: 'Diğer', unit: 'kg' };
+                const hasUsage = line.hasProductionUsageHistory === true || traceabilityLots[line.id] === true;
+                const isPriceLocked = loadingTraceability || !traceabilityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+                const isQuantityLocked = loadingTraceability || !traceabilityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+
                 return (
                   <div key={line.id} className="border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-xs hover:border-slate-300 transition-colors">
                     {/* Line Header */}
@@ -556,39 +787,101 @@ export default function RawMaterialReceiptCorrectionModal({
                         <span className="text-[10px] text-slate-400 font-semibold">Kategori: {rmInfo.category}</span>
                       </div>
                       <div className="text-[11px] font-semibold text-slate-500">
-                        Miktar: <span className="font-bold text-slate-800">{line.quantityReceived} {line.unit}</span> (Kalan: <span className="font-extrabold text-slate-800">{line.quantityRemaining} {line.unit}</span>)
+                        Orijinal Miktar: <span className="font-bold text-slate-800">{line.quantityReceivedInitial} {line.unit}</span> (Kalan: <span className="font-extrabold text-slate-800">{line.quantityRemaining} {line.unit}</span>)
                       </div>
                     </div>
 
                     {/* Line Controls */}
                     <div className="p-4 grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
-                      {/* Price Control (4 cols) */}
-                      <div className="md:col-span-3 space-y-1">
+                      {/* Price Control (2 cols) */}
+                      <div className="md:col-span-2 space-y-1">
                         <label className="block text-[10px] font-bold text-slate-500 uppercase">Birim Fiyat (TL)</label>
                         <div className="relative">
                           <input
                             type="text"
-                            disabled={line.isPriceLocked}
+                            disabled={isPriceLocked}
                             value={line.unitPrice}
                             onChange={(e) => handleLineFieldChange(line.id, 'unitPrice', e.target.value)}
                             placeholder="0.0000"
                             className={`w-full px-3 py-1.5 rounded-xl border text-xs font-bold focus:outline-none focus:border-indigo-500 ${
-                              line.isPriceLocked 
+                              isPriceLocked 
                                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' 
                                 : 'bg-white text-slate-800 border-slate-200'
                             }`}
                           />
                         </div>
-                        {line.isPriceLocked && (
-                          <div className="flex items-center gap-1 text-[10px] text-amber-600 font-bold mt-1">
-                            <Info size={11} />
-                            <span>Kullanıldığı için fiyat kilitli</span>
+                        {isPriceLocked && (
+                          <div className="flex flex-col gap-0.5 text-[9px] text-amber-600 font-bold mt-1 leading-tight">
+                            <div className="flex items-center gap-1">
+                              <Info size={10} className="shrink-0" />
+                              <span>Fiyat kilitli</span>
+                            </div>
+                            {hasUsage ? (
+                              <span className="text-slate-500 font-medium">
+                                Üretimde kullanıldığı için fiyat kilitli.
+                              </span>
+                            ) : (
+                              <span className="text-slate-500 font-medium">
+                                Kalan miktar kabulden farklı olduğu için fiyat kilitli.
+                              </span>
+                            )}
                           </div>
+                        )}
+                        {lineErrors[line.id]?.price && (
+                          <span className="text-[10px] text-rose-500 font-bold block mt-1">
+                            {lineErrors[line.id]?.price}
+                          </span>
                         )}
                       </div>
 
-                      {/* Tag Status Control (4 cols) */}
-                      <div className="md:col-span-3 space-y-1">
+                      {/* Kabul Miktarı Control (2 cols) */}
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase">Kabul Miktarı</label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="any"
+                            min="0.0001"
+                            disabled={isQuantityLocked}
+                            value={line.quantityReceived}
+                            onChange={(e) => handleLineFieldChange(line.id, 'quantityReceived', e.target.value)}
+                            placeholder="0.00"
+                            className={`w-full pr-10 px-3 py-1.5 rounded-xl border text-xs font-bold focus:outline-none focus:border-indigo-500 ${
+                              isQuantityLocked 
+                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' 
+                                : 'bg-white text-slate-800 border-slate-200'
+                            }`}
+                          />
+                          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-extrabold text-slate-400 font-mono">
+                            {line.unit}
+                          </span>
+                        </div>
+                        {isQuantityLocked && (
+                          <div className="flex flex-col gap-0.5 text-[9px] text-amber-600 font-bold mt-1 leading-tight">
+                            <div className="flex items-center gap-1">
+                              <Info size={10} className="shrink-0" />
+                              <span>Miktar kilitli</span>
+                            </div>
+                            {hasUsage ? (
+                              <span className="text-slate-500 font-medium">
+                                Aktif veya geri alınmış üretim geçmişi nedeniyle miktar kilitli.
+                              </span>
+                            ) : (
+                              <span className="text-slate-500 font-medium">
+                                Lot kalan miktarı kabul miktarından farklı (stoktan eksilmiş veya kullanılmış).
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {lineErrors[line.id]?.quantity && (
+                          <span className="text-[10px] text-rose-500 font-bold block mt-1">
+                            {lineErrors[line.id]?.quantity}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Tag Status Control (2 cols) */}
+                      <div className="md:col-span-2 space-y-1">
                         <label className="block text-[10px] font-bold text-slate-500 uppercase">Künye Durumu</label>
                         <select
                           value={line.kunyeStatus}
@@ -601,6 +894,11 @@ export default function RawMaterialReceiptCorrectionModal({
                             <option value="not_applicable">Künye Gerekmiyor / Yok</option>
                           )}
                         </select>
+                        {lineErrors[line.id]?.kunye && (
+                          <span className="text-[10px] text-rose-500 font-bold block mt-1">
+                            {lineErrors[line.id]?.kunye}
+                          </span>
+                        )}
                       </div>
 
                       {/* Tag Number Control (3 cols) */}
@@ -713,13 +1011,18 @@ export default function RawMaterialReceiptCorrectionModal({
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isSubmitting}
+              disabled={isSubmitting || loadingTraceability}
               className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 disabled:bg-indigo-400 flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               {isSubmitting ? (
                 <>
                   <Clock size={14} className="animate-spin" />
                   <span>Kaydediliyor...</span>
+                </>
+              ) : loadingTraceability ? (
+                <>
+                  <Clock size={14} className="animate-spin" />
+                  <span>Kontrol Ediliyor...</span>
                 </>
               ) : (
                 <>
