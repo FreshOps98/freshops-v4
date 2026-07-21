@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, AlertTriangle, Save, Clock, History, FileText, CheckCircle2, 
@@ -95,9 +95,18 @@ export default function RawMaterialReceiptCorrectionModal({
     return map;
   }, [rawMaterials]);
 
+  const initializedReceiptIdRef = useRef<string | null>(null);
+
   // Load Initial Data
   useEffect(() => {
-    if (isOpen && receipt) {
+    if (!isOpen) {
+      initializedReceiptIdRef.current = null;
+      return;
+    }
+
+    if (receipt && initializedReceiptIdRef.current !== receipt.id) {
+      initializedReceiptIdRef.current = receipt.id;
+
       // Filter lots for this receipt
       const receiptLots = lots.filter(lot => lot.rawMaterialReceiptId === receipt.id);
       
@@ -415,8 +424,8 @@ export default function RawMaterialReceiptCorrectionModal({
             </h4>
             <p className="text-xs text-slate-500 max-w-md font-semibold leading-relaxed">
               {successResult.noChanges 
-                ? "Form verilerinde veya ilişkili partilerde herhangi bir değişiklik tespit edilmedi. Düzeltme kaydı oluşturulmadı." 
-                : "Satın alma fişi, fiyatlar, irsaliye/fatura numaraları ve ilişkili parti bilgileri başarıyla atomik olarak güncellendi."}
+                ? "Herhangi bir değişiklik bulunmadı. Düzeltme kaydı oluşturulmadı." 
+                : "Satın alma fişi başarıyla güncellendi."}
             </p>
             
             {!successResult.noChanges && successResult.correctionId && (

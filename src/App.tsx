@@ -1551,6 +1551,10 @@ export default function App() {
       try {
         const result = await supabaseDataService.updateRawMaterialReceiptAtomic(input);
         
+        if (result.success === false || result.noChanges === true) {
+          return result;
+        }
+        
         // Refresh all relevant states on success
         const [rmList, smList, supList, recList, lotList] = await Promise.all([
           supabaseDataService.getRawMaterials(),
