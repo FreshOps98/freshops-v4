@@ -814,9 +814,15 @@ export default function FinishedGoodsView({
                         className="hover:bg-slate-50/50 transition-colors cursor-pointer"
                         onClick={() => setExpandedGroups(prev => ({ ...prev, [group.groupKey]: !isExpanded }))}
                       >
-                        <td className="py-3 px-4 font-mono font-bold text-slate-700">
-                          {planIds.length > 0 ? planIds.map(pid => `P-#${pid.substring(0, 5).toUpperCase()}`).join(', ') : 'Manuel'}
-                          <span className="block text-[9px] text-slate-400 font-normal">Plan No</span>
+                        <td className="py-3 px-4 font-mono font-bold text-slate-700 break-all">
+                          {planIds.length > 0 ? (
+                            planIds.map(pid => (
+                              <div key={pid}>{pid}</div>
+                            ))
+                          ) : (
+                            'Manuel'
+                          )}
+                          <span className="block text-[9px] text-slate-400 font-normal font-sans">Plan ID</span>
                         </td>
 
                         <td className="py-3 px-4">
@@ -979,15 +985,23 @@ export default function FinishedGoodsView({
                                             
                                             {detailGroup.stocks.length > 1 ? (
                                               <div className="mt-1.5 space-y-1">
-                                                <span className="block text-[9px] text-indigo-900/70 font-semibold mb-1">
+                                                <span className="block text-[9px] text-indigo-900/70 font-semibold mb-1 font-sans">
                                                   Birleştirilen Kayıtlar ({detailGroup.stocks.length} Giriş):
                                                 </span>
                                                 {detailGroup.stocks.map((s, idx) => (
-                                                  <div key={s.id} className="flex items-center justify-between gap-2 bg-slate-50/80 hover:bg-slate-100 p-1 rounded border border-slate-100 text-[9px] font-medium text-slate-600">
-                                                    <span>Giriş #{idx + 1}: {s.quantityProduced} Pkt / Kalan: {s.quantityRemaining} Pkt</span>
+                                                  <div key={s.id} className="flex items-center justify-between gap-2 bg-slate-50/80 hover:bg-slate-100 p-1.5 rounded border border-slate-100 text-[9px] font-medium text-slate-600">
+                                                    <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                                                      <span className="font-sans">Giriş #{idx + 1}: {s.quantityProduced} Pkt / Kalan: {s.quantityRemaining} Pkt</span>
+                                                      <div className="text-[9px] text-slate-500 font-sans">
+                                                        <span>Üretim Kaydı ID: </span>
+                                                        <span className="font-mono text-slate-700 break-all font-bold">
+                                                          {s.productionRunId ? s.productionRunId : 'Manuel / Eski kayıt'}
+                                                        </span>
+                                                      </div>
+                                                    </div>
                                                     <button
                                                       onClick={() => handleOpenFinishedGoodsTraceability(s.id)}
-                                                      className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-1.5 py-0.5 rounded text-[8px] transition-colors cursor-pointer shrink-0"
+                                                      className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-1.5 py-0.5 rounded text-[8px] transition-colors cursor-pointer shrink-0 self-start font-sans"
                                                       title="Kaydın girdi lot izlenebilirliği"
                                                     >
                                                       İzlenebilirlik
@@ -996,11 +1010,17 @@ export default function FinishedGoodsView({
                                                 ))}
                                               </div>
                                             ) : (
-                                              detailGroup.stocks[0]?.id && (
-                                                <div className="mt-1.5">
+                                              detailGroup.stocks[0] && (
+                                                <div className="mt-1.5 flex items-center justify-between gap-2 bg-slate-50/80 p-1.5 rounded border border-slate-100 text-[9px] font-medium text-slate-600">
+                                                  <div className="text-[9px] text-slate-500 font-sans flex-1 min-w-0">
+                                                    <span>Üretim Kaydı ID: </span>
+                                                    <span className="font-mono text-slate-700 break-all font-bold">
+                                                      {detailGroup.stocks[0].productionRunId ? detailGroup.stocks[0].productionRunId : 'Manuel / Eski kayıt'}
+                                                    </span>
+                                                  </div>
                                                   <button
                                                     onClick={() => handleOpenFinishedGoodsTraceability(detailGroup.stocks[0].id)}
-                                                    className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-1.5 py-0.5 rounded text-[9px] transition-all cursor-pointer inline-flex items-center gap-0.5 shrink-0"
+                                                    className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-1.5 py-0.5 rounded text-[9px] transition-all cursor-pointer inline-flex items-center gap-0.5 shrink-0 font-sans"
                                                     title="Parti girdi lot izlenebilirliği"
                                                   >
                                                     İzlenebilirlik
