@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 -- 8. PRODUCTION PLANS TABLE
 CREATE TABLE IF NOT EXISTS production_plans (
   id TEXT PRIMARY KEY,
-  plan_date TEXT NOT NULL,
+  production_date DATE NOT NULL,
   status TEXT NOT NULL, -- 'Bekliyor', 'Üretimde', 'Tamamlandı'
   note TEXT,
   closed_with_shortage BOOLEAN DEFAULT FALSE,
@@ -690,7 +690,7 @@ AS $function$
 DECLARE
   v_has_produced BOOLEAN;
 BEGIN
-  IF LOWER(TRIM(COALESCE(NEW.status, ''))) IN ('tamamlandı', 'completed', 'plan tamamlandı') THEN
+  IF LOWER(TRIM(TRANSLATE(COALESCE(NEW.status, ''), 'İI', 'ii'))) IN ('tamamlandı', 'completed', 'plan tamamlandı') THEN
     IF COALESCE(NEW.is_locked, FALSE) = FALSE
        AND NEW.completed_at IS NULL
        AND NEW.closed_at IS NULL
@@ -814,7 +814,7 @@ BEGIN
   IF v_closed_at IS NOT NULL
      OR v_completed_at IS NOT NULL
      OR v_closed_with_shortage = TRUE
-     OR LOWER(TRIM(COALESCE(v_plan_status, ''))) IN (
+     OR LOWER(TRIM(TRANSLATE(COALESCE(v_plan_status, ''), 'İI', 'ii'))) IN (
        'eksikle kapatıldı',
        'iptal',
        'iptal edildi',

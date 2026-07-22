@@ -1,6 +1,6 @@
 import { localDataService } from './localDataService';
 import { supabaseDataService, resetAllFreshOpsData } from './supabaseDataService';
-import { isProductionPlanClosed } from './calcService';
+import { isProductionPlanClosed } from './productionPlanLifecycle';
 import {
   Customer,
   RawMaterial,
@@ -343,45 +343,78 @@ export const dataService = {
       if (isProductionPlanClosed(plan)) {
         return { success: false, error: 'Bu üretim planı kapalı veya iptal edildiği için yeni kalem eklenemez.' };
       }
-      const existingItems = localDataService.getProductionPlanItems().filter(i => i.productionPlanId === productionPlanId);
-      const existing = existingItems.find(i => i.orderItemId === orderItemId && !i.isDeleted);
+      const allItems = localDataService.getProductionPlanItems();
+      const planItems = allItems.filter(i => i.productionPlanId === productionPlanId);
       
-      let updatedItems = [...existingItems];
-      if (existing) {
-        existing.plannedQuantity += plannedQuantity;
+      const activeItem = planItems.find(i => i.orderItemId === orderItemId && !i.isDeleted);
+      if (activeItem) {
+        return {
+          success: true,
+          id: activeItem.id,
+          inserted: false,
+          reactivated: false,
+          message: 'Bu sipariş kalemi zaten bu plana ekli. Tekrar işlem yapılmadı.'
+        };
+      }
+
+      const deletedItem = planItems.find(i => i.orderItemId === orderItemId && i.isDeleted);
+      let targetItemId: string;
+      let inserted = false;
+      let reactivated = false;
+      let returnMsg = '';
+
+      if (deletedItem) {
+        deletedItem.isDeleted = false;
+        deletedItem.deletedAt = undefined;
+        deletedItem.deletedReason = undefined;
+        deletedItem.plannedQuantity = Number(plannedQuantity);
+        deletedItem.producedQuantity = 0;
+        deletedItem.status = 'Planlandı' as any;
+        targetItemId = deletedItem.id;
+        reactivated = true;
+        returnMsg = 'Silinmiş plan kalemi yeniden aktif edildi.';
       } else {
         const order = localDataService.getOrders().find(o => o.id === orderId);
-        const newItem = {
+        const newItem: any = {
           id: 'ppi_' + Math.random().toString(36).substring(2, 9),
           productionPlanId,
           orderId,
           orderItemId,
           customerId: order?.customerId || '',
           productId,
-          plannedQuantity,
+          plannedQuantity: Number(plannedQuantity),
           producedQuantity: 0,
           status: 'Planlandı' as any,
           note: '',
           rawMaterialsDeducted: false,
-          finishedGoodsCreated: false
+          finishedGoodsCreated: false,
+          isDeleted: false
         };
-        updatedItems.push(newItem);
+        allItems.push(newItem);
+        targetItemId = newItem.id;
+        inserted = true;
+        returnMsg = 'Sipariş kalemi üretim planına eklendi.';
       }
-      const hasProduction = updatedItems.some(i => !i.isDeleted && (i.producedQuantity || 0) > 0);
+
+      const currentPlanItems = allItems.filter(i => i.productionPlanId === productionPlanId && !i.isDeleted);
+      const hasProduction = currentPlanItems.some(i => (i.producedQuantity || 0) > 0);
       const newStatus = hasProduction ? 'Üretimde' : 'Planlandı';
 
       localDataService.updateProductionPlan(
         productionPlanId,
         {
-          status: newStatus as any,
-          completedAt: undefined,
-          closedAt: undefined,
-          closedWithShortage: false,
-          isLocked: false
+          status: newStatus as any
         },
-        updatedItems
+        allItems.filter(i => i.productionPlanId === productionPlanId)
       );
-      return { success: true };
+
+      return {
+        success: true,
+        id: targetItemId,
+        inserted,
+        reactivated,
+        message: returnMsg
+      };
     }
   },
   deleteProductionPlan(id: string) {
