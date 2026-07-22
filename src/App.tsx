@@ -996,13 +996,9 @@ export default function App() {
       const computedStatus = calculateProductionPlanStatus(plan.id, currentItemsToUse, productionRuns, plan.status);
       if (plan.status !== computedStatus) {
         plansChanged = true;
-        const completedAt = computedStatus === "Tamamlandı" 
-          ? (plan.completedAt || new Date().toISOString()) 
-          : undefined;
         return {
           ...plan,
           status: computedStatus,
-          completedAt,
           updatedAt: new Date().toISOString()
         };
       }
@@ -2500,10 +2496,6 @@ export default function App() {
           return {
             ...p,
             status: computedStatus,
-            closedWithShortage: false,
-            completedAt: computedStatus === 'Tamamlandı' ? (p.completedAt || now) : undefined,
-            closedAt: undefined,
-            isLocked: false,
             updatedAt: now
           };
         }

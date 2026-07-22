@@ -1,5 +1,6 @@
 import { localDataService } from './localDataService';
 import { supabaseDataService, resetAllFreshOpsData } from './supabaseDataService';
+import { isProductionPlanClosed } from './calcService';
 import {
   Customer,
   RawMaterial,
@@ -339,6 +340,9 @@ export const dataService = {
     } else {
       const plan = localDataService.getProductionPlans().find(p => p.id === productionPlanId);
       if (!plan) throw new Error("Plan not found");
+      if (isProductionPlanClosed(plan)) {
+        return { success: false, error: 'Bu üretim planı kapalı veya iptal edildiği için yeni kalem eklenemez.' };
+      }
       const existingItems = localDataService.getProductionPlanItems().filter(i => i.productionPlanId === productionPlanId);
       const existing = existingItems.find(i => i.orderItemId === orderItemId && !i.isDeleted);
       
@@ -363,7 +367,20 @@ export const dataService = {
         };
         updatedItems.push(newItem);
       }
-      localDataService.updateProductionPlan(productionPlanId, {}, updatedItems);
+      const hasProduction = updatedItems.some(i => !i.isDeleted && (i.producedQuantity || 0) > 0);
+      const newStatus = hasProduction ? 'Üretimde' : 'Planlandı';
+
+      localDataService.updateProductionPlan(
+        productionPlanId,
+        {
+          status: newStatus as any,
+          completedAt: undefined,
+          closedAt: undefined,
+          closedWithShortage: false,
+          isLocked: false
+        },
+        updatedItems
+      );
       return { success: true };
     }
   },

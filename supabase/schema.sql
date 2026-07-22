@@ -680,6 +680,51 @@ GRANT EXECUTE ON FUNCTION
 TO authenticated, service_role;
 
 
+-- 15.5. KEEP PRODUCTION PLAN OPEN UNTIL EXPLICIT CLOSE TRIGGER
+CREATE OR REPLACE FUNCTION public.keep_production_plan_open_until_explicit_close()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_has_produced BOOLEAN;
+BEGIN
+  IF LOWER(TRIM(COALESCE(NEW.status, ''))) IN ('tamamlandı', 'completed', 'plan tamamlandı') THEN
+    IF COALESCE(NEW.is_locked, FALSE) = FALSE
+       AND NEW.completed_at IS NULL
+       AND NEW.closed_at IS NULL
+       AND COALESCE(NEW.closed_with_shortage, FALSE) = FALSE
+    THEN
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.production_plan_items
+        WHERE production_plan_id = NEW.id
+          AND organization_id = NEW.organization_id
+          AND COALESCE(is_deleted, FALSE) = FALSE
+          AND COALESCE(produced_quantity, 0) > 0
+      ) INTO v_has_produced;
+
+      IF v_has_produced THEN
+        NEW.status := 'Üretimde';
+      ELSE
+        NEW.status := 'Planlandı';
+      END IF;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS trg_keep_production_plan_open_until_explicit_close ON public.production_plans;
+
+CREATE TRIGGER trg_keep_production_plan_open_until_explicit_close
+BEFORE INSERT OR UPDATE ON public.production_plans
+FOR EACH ROW
+EXECUTE FUNCTION public.keep_production_plan_open_until_explicit_close();
+
+
 -- 16. ADD ORDER ITEM TO PRODUCTION PLAN ATOMIC RPC
 CREATE OR REPLACE FUNCTION public.add_order_item_to_production_plan_atomic(
   p_production_plan_id text,
@@ -706,6 +751,8 @@ DECLARE
   v_existing_id TEXT;
   v_existing_is_deleted BOOLEAN;
   v_new_item_id TEXT;
+  v_has_produced BOOLEAN;
+  v_new_plan_status TEXT;
 BEGIN
   /*
    * p_unit eski frontend/RPC imzasıyla uyumluluk için korunur.
@@ -768,18 +815,19 @@ BEGIN
      OR v_completed_at IS NOT NULL
      OR v_closed_with_shortage = TRUE
      OR LOWER(TRIM(COALESCE(v_plan_status, ''))) IN (
-       'tamamlandı',
        'eksikle kapatıldı',
        'iptal',
        'iptal edildi',
        'kapalı',
-       'completed',
-       'cancelled'
+       'eksikle_kapatildi',
+       'closed_with_shortage',
+       'cancelled',
+       'closed'
      )
   THEN
     RETURN json_build_object(
       'success', false,
-      'error', 'Bu üretim planı kapalı veya tamamlanmış olduğu için yeni kalem eklenemez.'
+      'error', 'Bu üretim planı kapalı veya iptal edildiği için yeni kalem eklenemez.'
     );
   END IF;
 
@@ -851,6 +899,32 @@ BEGIN
       WHERE id = v_existing_id
         AND organization_id = v_org_id;
 
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.production_plan_items
+        WHERE production_plan_id = p_production_plan_id
+          AND organization_id = v_org_id
+          AND COALESCE(is_deleted, FALSE) = FALSE
+          AND COALESCE(produced_quantity, 0) > 0
+      ) INTO v_has_produced;
+
+      IF v_has_produced THEN
+        v_new_plan_status := 'Üretimde';
+      ELSE
+        v_new_plan_status := 'Planlandı';
+      END IF;
+
+      UPDATE public.production_plans
+      SET
+        status = v_new_plan_status,
+        completed_at = NULL,
+        closed_at = NULL,
+        closed_with_shortage = FALSE,
+        is_locked = FALSE,
+        updated_at = NOW()
+      WHERE id = p_production_plan_id
+        AND organization_id = v_org_id;
+
       PERFORM public.recompute_order_status_atomic(p_order_id);
 
       RETURN json_build_object(
@@ -910,6 +984,32 @@ BEGIN
     NOW(),
     NOW()
   );
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.production_plan_items
+    WHERE production_plan_id = p_production_plan_id
+      AND organization_id = v_org_id
+      AND COALESCE(is_deleted, FALSE) = FALSE
+      AND COALESCE(produced_quantity, 0) > 0
+  ) INTO v_has_produced;
+
+  IF v_has_produced THEN
+    v_new_plan_status := 'Üretimde';
+  ELSE
+    v_new_plan_status := 'Planlandı';
+  END IF;
+
+  UPDATE public.production_plans
+  SET
+    status = v_new_plan_status,
+    completed_at = NULL,
+    closed_at = NULL,
+    closed_with_shortage = FALSE,
+    is_locked = FALSE,
+    updated_at = NOW()
+  WHERE id = p_production_plan_id
+    AND organization_id = v_org_id;
 
   PERFORM public.recompute_order_status_atomic(p_order_id);
 

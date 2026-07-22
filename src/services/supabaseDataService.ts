@@ -1367,6 +1367,27 @@ export const supabaseDataService = {
     }
 
     // 2. Fallback JS Implementation (atomic & robust)
+    const { data: plan, error: planErr } = await supabase
+      .from('production_plans')
+      .select('status, is_locked, closed_at, completed_at, closed_with_shortage')
+      .eq('id', productionPlanId)
+      .single();
+    if (planErr) throw planErr;
+
+    const statusNorm = (plan.status || '').toLocaleLowerCase('tr-TR').trim();
+    if (
+      plan.is_locked ||
+      plan.closed_at ||
+      plan.completed_at ||
+      plan.closed_with_shortage ||
+      ['eksikle kapatıldı', 'iptal', 'iptal edildi', 'kapalı', 'eksikle_kapatildi', 'closed_with_shortage', 'cancelled', 'closed'].includes(statusNorm)
+    ) {
+      return {
+        success: false,
+        error: 'Bu üretim planı kapalı veya iptal edildiği için yeni kalem eklenemez.'
+      };
+    }
+
     // Get the customer ID from the order
     const { data: order, error: orderErr } = await supabase
       .from('orders')
@@ -1413,6 +1434,28 @@ export const supabaseDataService = {
         updated_at: new Date().toISOString()
       });
     if (insErr) throw insErr;
+
+    // Check active items to set plan status
+    const { data: activeItems } = await supabase
+      .from('production_plan_items')
+      .select('produced_quantity')
+      .eq('production_plan_id', productionPlanId)
+      .eq('is_deleted', false);
+
+    const hasProduction = (activeItems || []).some(i => (i.produced_quantity || 0) > 0);
+    const newPlanStatus = hasProduction ? 'Üretimde' : 'Planlandı';
+
+    await supabase
+      .from('production_plans')
+      .update({
+        status: newPlanStatus,
+        completed_at: null,
+        closed_at: null,
+        closed_with_shortage: false,
+        is_locked: false,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', productionPlanId);
 
     // Update order status/computed status to 'Üretim Planlandı'
     const { error: updErr } = await supabase

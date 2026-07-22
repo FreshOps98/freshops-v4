@@ -2395,14 +2395,10 @@ export function syncProductionPlanStatuses(
       return plan;
     }
     const computedStatus = calculateProductionPlanStatus(plan.id, productionPlanItems, productionRuns, plan.status);
-    const completedAt = computedStatus === "Tamamlandı" 
-      ? (plan.completedAt || new Date().toISOString()) 
-      : undefined;
 
     return {
       ...plan,
       status: computedStatus,
-      completedAt,
       updatedAt: new Date().toISOString()
     };
   });
@@ -2410,22 +2406,24 @@ export function syncProductionPlanStatuses(
 
 export function isProductionPlanClosed(plan: ProductionPlan | undefined | null): boolean {
   if (!plan) return false;
-  const status = (plan.status || '').toLowerCase().trim();
+  if (plan.closedAt) return true;
+  if (plan.completedAt) return true;
+  if (plan.closedWithShortage === true) return true;
+  if (plan.isLocked === true) return true;
+
+  const status = (plan.status || '').toLocaleLowerCase('tr-TR').trim();
   if (
-    status === "tamamlandı" ||
     status === "eksikle kapatıldı" ||
     status === "iptal" ||
-    status === "completed" ||
-    status === "plan tamamlandı" ||
+    status === "iptal edildi" ||
+    status === "kapalı" ||
     status === "eksikle_kapatildi" ||
     status === "closed_with_shortage" ||
-    status === "cancelled"
+    status === "cancelled" ||
+    status === "closed"
   ) {
     return true;
   }
-  if (plan.closedAt) return true;
-  if (plan.closedWithShortage === true) return true;
-  if (plan.isLocked === true) return true;
   return false;
 }
 
