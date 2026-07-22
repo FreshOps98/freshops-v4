@@ -643,6 +643,18 @@ export default function OrdersView({
       const prod = products.find(p => p.id === item.productId);
       if (!prod) return null;
 
+      const itemSummary = calculateOrderItemOperationalSummary(
+        item.id,
+        item.quantity,
+        productionPlanItems,
+        finishedGoodsStocks,
+        finishedGoodsMovements,
+        productionRuns,
+        item.productId,
+        item.orderId
+      );
+      const remainingToProduce = Math.max(0, itemSummary.remainingToProduce || 0);
+
       const safetyRate = resolveSafetyRate(item, prod, resolvedCostSettings);
       const prodRecipes = recipes.filter(r => r.productId === prod.id);
 
@@ -657,8 +669,12 @@ export default function OrdersView({
         const safetyAdj = calculateSafetyAdjustedRequirement(netReq, safetyRate);
         const grossReq = calculateGrossRequirement(safetyAdj, wasteRate);
         const estimatedWaste = calculateEstimatedWaste(grossReq, safetyAdj);
+
+        const remainingNetReq = calculateNetRequirement(remainingToProduce, recipe.quantity, rm.unit === 'kg' ? 'kg' : rm.unit);
+        const remainingSafetyAdj = calculateSafetyAdjustedRequirement(remainingNetReq, safetyRate);
+        const remainingGrossReq = calculateGrossRequirement(remainingSafetyAdj, wasteRate);
+
         const stock = currentStocks[rm.id] || 0;
-        const missing = stock < grossReq ? grossReq - stock : 0;
 
         return {
           materialName: rm.name,
@@ -670,8 +686,10 @@ export default function OrdersView({
           yieldRate,
           grossReq,
           estimatedWaste,
+          remainingNetReq,
+          remainingSafetyAdj,
+          remainingGrossReq,
           stock,
-          missing,
           cost: grossReq * (rm.averageCost ?? calculateWeightedAverageCost(rm.id, stockMovements || [], rm.purchasePrice))
         };
       }).filter(Boolean);
@@ -1008,21 +1026,24 @@ export default function OrdersView({
                     <thead>
                       <tr className="border-b border-slate-100 text-slate-400 font-semibold uppercase">
                         <th className="py-2">Hammadde</th>
-                        <th className="py-2 text-right">Net İhtiyaç</th>
+                        <th className="py-2 text-right">Sipariş Net Toplam</th>
                         <th className="py-2 text-right">Fire Oranı %</th>
                         <th className="py-2 text-right">Randıman</th>
                         <th className="py-2 text-right">Güvenlik Payı</th>
-                        <th className="py-2 text-right text-emerald-600">Gerekli Ham (Brüt)</th>
+                        <th className="py-2 text-right text-emerald-600">Sipariş Brüt Toplam</th>
                         <th className="py-2 text-right text-amber-600">Tahmini Fire</th>
+                        <th className="py-2 text-right text-orange-600">Kalan Brüt İhtiyaç</th>
                         <th className="py-2 text-right">Mevcut Stok</th>
                         <th className="py-2 text-right">Eksik / Fazla</th>
-                        <th className="py-2 text-right">Tahmini Maliyet</th>
+                        <th className="py-2 text-right">Planlanan Maliyet</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-slate-700">
                       {line.ingredients.map((ing: any, i: number) => {
-                        const isUnder = ing.stock < ing.grossReq;
-                        const diff = ing.stock - ing.grossReq;
+                        const remainingGross = ing.remainingGrossReq || 0;
+                        const hasRemainingNeed = remainingGross >= 0.0001;
+                        const diff = ing.stock - remainingGross;
+                        const isUnder = hasRemainingNeed && ing.stock < remainingGross - 0.0001;
 
                         return (
                           <tr key={i}>
@@ -1033,12 +1054,15 @@ export default function OrdersView({
                             <td className="py-3 text-right text-slate-400 font-medium">%{ing.safetyRate}</td>
                             <td className="py-3 text-right font-extrabold text-emerald-700">{formatWeight(ing.grossReq, ing.unit)}</td>
                             <td className="py-3 text-right font-medium text-amber-600">{formatWeight(ing.estimatedWaste, ing.unit)}</td>
+                            <td className="py-3 text-right font-bold text-orange-700">{formatWeight(remainingGross, ing.unit)}</td>
                             <td className="py-3 text-right font-semibold text-slate-800">{formatWeight(ing.stock, ing.unit)}</td>
-                            <td className={`py-3 text-right font-bold ${isUnder ? 'text-red-600' : 'text-emerald-600'}`}>
-                              {isUnder ? (
-                                <span>{formatWeight(Math.abs(diff), ing.unit)} Eksik</span>
+                            <td className="py-3 text-right font-bold">
+                              {!hasRemainingNeed ? (
+                                <span className="text-emerald-600 font-bold">İhtiyaç Yok</span>
+                              ) : isUnder ? (
+                                <span className="text-red-600 font-bold">{formatWeight(remainingGross - ing.stock, ing.unit)} Eksik</span>
                               ) : (
-                                <span>{formatWeight(diff, ing.unit)} Fazla</span>
+                                <span className="text-emerald-600 font-bold">{formatWeight(diff, ing.unit)} Fazla</span>
                               )}
                             </td>
                             <td className="py-3 text-right font-bold text-slate-900">{formatCurrency(ing.cost)}</td>
