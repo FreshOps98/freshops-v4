@@ -776,23 +776,31 @@ export default function OrdersView({
               </div>
             </div>
 
-            {/* Discrepancy warning if physical shipping differs from ordered */}
-            {orderStats.realizedBreakdown.orderedQuantity !== orderStats.realizedBreakdown.shippedQuantity && (
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-4 py-3.5 rounded-xl flex items-start gap-2.5 w-full animate-in fade-in">
-                <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold">Fiziksel Sevk Farkı / Fire Tespit Edildi:</span>
-                  <p className="mt-0.5 text-slate-600 leading-relaxed">
-                    Sipariş edilen toplam <strong className="text-slate-800">{orderStats.realizedBreakdown.orderedQuantity} paket</strong> üründen, fire/kırık/bozulma sebebiyle yalnızca <strong className="text-slate-800">{orderStats.realizedBreakdown.shippedQuantity} paket</strong> fiilen sevk edildi.
-                    {orderStats.realizedBreakdown.orderedQuantity > orderStats.realizedBreakdown.shippedQuantity && (
-                      <span className="block mt-1 font-semibold text-rose-700">
-                        Sevk edilemeyen eksik miktar: {orderStats.realizedBreakdown.orderedQuantity - orderStats.realizedBreakdown.shippedQuantity} paket
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
+            {/* Partial shipping info banner */}
+            {(() => {
+              const detailMetrics = getOrderMetrics(
+                detailOrder.id,
+                orderItems,
+                productionPlanItems,
+                finishedGoodsStocks,
+                finishedGoodsMovements,
+                productionRuns
+              );
+              if (detailMetrics.totalShippedQuantity > 0 && detailMetrics.kalanSevkiyatAdedi > 0) {
+                return (
+                  <div className="bg-blue-50/80 border border-blue-200 text-blue-900 text-xs px-4 py-3.5 rounded-xl flex items-start gap-2.5 w-full animate-in fade-in">
+                    <ShoppingBag size={16} className="text-blue-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-blue-900">Kısmi Sevkiyat Devam Ediyor</span>
+                      <p className="mt-0.5 text-slate-700 leading-relaxed">
+                        {detailMetrics.totalOrderQuantity} paketlik siparişin {detailMetrics.totalShippedQuantity} paketi sevk edildi. {detailMetrics.nihaiUrunStoguBekleyen} paket mamul stokta sevkiyat bekliyor. Kalan sevk miktarı {detailMetrics.kalanSevkiyatAdedi} pakettir.
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+              return null;
+            })()}
 
             {/* Financial indicators for the order */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full animate-in fade-in">
