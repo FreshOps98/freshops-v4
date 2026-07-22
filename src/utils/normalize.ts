@@ -113,6 +113,10 @@ export function normalizeFinishedGoodsStock(stock: any): FinishedGoodsStock {
     orderItemId: stock?.orderItemId || '',
     productionPlanId: stock?.productionPlanId || '',
     productionPlanItemId: stock?.productionPlanItemId || '',
+    productionRunId:
+      stock?.productionRunId ||
+      stock?.production_run_id ||
+      undefined,
     productionDate: stock?.productionDate || getTodayISO(),
     deliveryDate: stock?.deliveryDate || getTodayISO(),
     quantityProduced,
