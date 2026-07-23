@@ -203,6 +203,9 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
 
   // Initial load & Realtime Subscription
   useEffect(() => {
+    const effectUserId = currentUserId;
+    let isEffectActive = true;
+
     activeUserIdRef.current = currentUserId;
 
     // Invalidate any existing in-flight requests, clear timers, and reset state on user change
@@ -243,12 +246,16 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
           filter: `recipient_user_id=eq.${currentUserId}`
         },
         () => {
+          if (!isEffectActive || activeUserIdRef.current !== effectUserId) return;
           handleRealtimeRefresh();
         }
       )
       .subscribe((status, err) => {
+        if (!isEffectActive || activeUserIdRef.current !== effectUserId) return;
+
         if (status === 'SUBSCRIBED') {
           setRealtimeError(null);
+          void executeRefresh();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           console.warn('Realtime subscription issue:', status, err);
           setRealtimeError('Realtime bildirim akışında aksama oluştu.');
@@ -256,6 +263,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
       });
 
     return () => {
+      isEffectActive = false;
       requestSeqRef.current++;
       hasQueuedRefreshRef.current = false;
       markingReadIdsRef.current.clear();
@@ -265,7 +273,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
       }
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, fetchNotificationsData, handleRealtimeRefresh]);
+  }, [currentUserId, fetchNotificationsData, executeRefresh, handleRealtimeRefresh]);
 
   // Click outside & Escape key listeners
   useEffect(() => {
@@ -407,6 +415,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
                 onClick={() => setIsOpen(false)}
                 className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
                 title="Kapat"
+                aria-label="Kapat"
               >
                 <X size={16} />
               </button>
