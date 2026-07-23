@@ -125,16 +125,22 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const markingReadIdsRef = useRef<Set<string>>(new Set());
   
+  // Active user ref to prevent stale closure issues across user switching
+  const activeUserIdRef = useRef<string>(currentUserId);
+  activeUserIdRef.current = currentUserId;
+
   // Race condition & refresh coordination refs
   const isRefreshingRef = useRef<boolean>(false);
   const hasQueuedRefreshRef = useRef<boolean>(false);
   const requestSeqRef = useRef<number>(0);
   const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch notifications & unread count from RPCs with generation tracking
+  // Fetch notifications & unread count from RPCs with generation and active user tracking
   const fetchNotificationsData = useCallback(async (showLoading = false) => {
+    const targetUserId = activeUserIdRef.current;
+    if (!targetUserId) return;
+
     const seq = ++requestSeqRef.current;
-    const targetUserId = currentUserId;
 
     if (showLoading) setIsLoading(true);
     setError(null);
@@ -145,44 +151,45 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         supabaseDataService.getInAppNotifications(30)
       ]);
 
-      // Ensure request is still valid and user hasn't changed
-      if (seq !== requestSeqRef.current || targetUserId !== currentUserId) {
+      // Ensure request sequence is still current and user hasn't changed
+      if (seq !== requestSeqRef.current || activeUserIdRef.current !== targetUserId) {
         return;
       }
 
       setUnreadCount(count);
       setNotifications(list);
     } catch (err: any) {
-      if (seq !== requestSeqRef.current || targetUserId !== currentUserId) {
+      if (seq !== requestSeqRef.current || activeUserIdRef.current !== targetUserId) {
         return;
       }
       console.error("NotificationCenter fetch error:", err);
       setError("Bildirimler yüklenirken bir hata oluştu.");
     } finally {
-      if (seq === requestSeqRef.current && targetUserId === currentUserId) {
+      if (seq === requestSeqRef.current && activeUserIdRef.current === targetUserId) {
         setIsLoading(false);
       }
     }
-  }, [currentUserId]);
+  }, []);
 
-  // Execute refresh with trailing queue to prevent dropping Realtime refresh requests
+  // Execute refresh with a clean loop to process trailing Realtime refresh requests safely
   const executeRefresh = useCallback(async () => {
+    if (!activeUserIdRef.current) return;
+
     if (isRefreshingRef.current) {
       hasQueuedRefreshRef.current = true;
       return;
     }
 
     isRefreshingRef.current = true;
-    hasQueuedRefreshRef.current = false;
 
     try {
-      await fetchNotificationsData(false);
+      do {
+        hasQueuedRefreshRef.current = false;
+        await fetchNotificationsData(false);
+      } while (hasQueuedRefreshRef.current && activeUserIdRef.current);
     } finally {
       isRefreshingRef.current = false;
-      if (hasQueuedRefreshRef.current) {
-        hasQueuedRefreshRef.current = false;
-        void executeRefresh();
-      }
+      hasQueuedRefreshRef.current = false;
     }
   }, [fetchNotificationsData]);
 
@@ -196,19 +203,32 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
 
   // Initial load & Realtime Subscription
   useEffect(() => {
+    activeUserIdRef.current = currentUserId;
+
+    // Invalidate any existing in-flight requests, clear timers, and reset state on user change
+    requestSeqRef.current++;
+    hasQueuedRefreshRef.current = false;
+    markingReadIdsRef.current.clear();
+
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+
     if (!currentUserId) {
       setNotifications([]);
       setUnreadCount(0);
+      setError(null);
+      setRealtimeError(null);
       return;
     }
 
-    // Invalidate any existing in-flight requests and clear state on user change
-    requestSeqRef.current++;
-    hasQueuedRefreshRef.current = false;
     setNotifications([]);
     setUnreadCount(0);
+    setError(null);
+    setRealtimeError(null);
 
-    fetchNotificationsData(true);
+    void fetchNotificationsData(true);
 
     // Setup realtime subscription
     const channelName = `notifications_${currentUserId}_${Date.now()}`;
@@ -238,7 +258,11 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
     return () => {
       requestSeqRef.current++;
       hasQueuedRefreshRef.current = false;
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      markingReadIdsRef.current.clear();
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
       void supabase.removeChannel(channel);
     };
   }, [currentUserId, fetchNotificationsData, handleRealtimeRefresh]);
