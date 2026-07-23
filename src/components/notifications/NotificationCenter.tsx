@@ -124,11 +124,18 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const markingReadIdsRef = useRef<Set<string>>(new Set());
+  
+  // Race condition & refresh coordination refs
   const isRefreshingRef = useRef<boolean>(false);
+  const hasQueuedRefreshRef = useRef<boolean>(false);
+  const requestSeqRef = useRef<number>(0);
   const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch notifications & unread count from RPCs
+  // Fetch notifications & unread count from RPCs with generation tracking
   const fetchNotificationsData = useCallback(async (showLoading = false) => {
+    const seq = ++requestSeqRef.current;
+    const targetUserId = currentUserId;
+
     if (showLoading) setIsLoading(true);
     setError(null);
 
@@ -137,31 +144,69 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         supabaseDataService.getUnreadNotificationCount(),
         supabaseDataService.getInAppNotifications(30)
       ]);
+
+      // Ensure request is still valid and user hasn't changed
+      if (seq !== requestSeqRef.current || targetUserId !== currentUserId) {
+        return;
+      }
+
       setUnreadCount(count);
       setNotifications(list);
     } catch (err: any) {
+      if (seq !== requestSeqRef.current || targetUserId !== currentUserId) {
+        return;
+      }
       console.error("NotificationCenter fetch error:", err);
       setError("Bildirimler yüklenirken bir hata oluştu.");
     } finally {
-      setIsLoading(false);
+      if (seq === requestSeqRef.current && targetUserId === currentUserId) {
+        setIsLoading(false);
+      }
     }
-  }, []);
+  }, [currentUserId]);
+
+  // Execute refresh with trailing queue to prevent dropping Realtime refresh requests
+  const executeRefresh = useCallback(async () => {
+    if (isRefreshingRef.current) {
+      hasQueuedRefreshRef.current = true;
+      return;
+    }
+
+    isRefreshingRef.current = true;
+    hasQueuedRefreshRef.current = false;
+
+    try {
+      await fetchNotificationsData(false);
+    } finally {
+      isRefreshingRef.current = false;
+      if (hasQueuedRefreshRef.current) {
+        hasQueuedRefreshRef.current = false;
+        void executeRefresh();
+      }
+    }
+  }, [fetchNotificationsData]);
 
   // Debounced refresh for realtime INSERTs
   const handleRealtimeRefresh = useCallback(() => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
-      if (isRefreshingRef.current) return;
-      isRefreshingRef.current = true;
-      fetchNotificationsData(false).finally(() => {
-        isRefreshingRef.current = false;
-      });
+      void executeRefresh();
     }, 200);
-  }, [fetchNotificationsData]);
+  }, [executeRefresh]);
 
   // Initial load & Realtime Subscription
   useEffect(() => {
-    if (!currentUserId) return;
+    if (!currentUserId) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return;
+    }
+
+    // Invalidate any existing in-flight requests and clear state on user change
+    requestSeqRef.current++;
+    hasQueuedRefreshRef.current = false;
+    setNotifications([]);
+    setUnreadCount(0);
 
     fetchNotificationsData(true);
 
@@ -191,6 +236,8 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
       });
 
     return () => {
+      requestSeqRef.current++;
+      hasQueuedRefreshRef.current = false;
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       void supabase.removeChannel(channel);
     };
@@ -221,30 +268,43 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
     };
   }, [isOpen]);
 
-  // Single Notification Click Handler
-  const handleNotificationClick = async (notification: InAppNotification) => {
+  // Optimistic & Non-blocking Single Notification Click Handler
+  const handleNotificationClick = (notification: InAppNotification) => {
     const { deliveryId, readAt, entityType, eventType } = notification;
 
-    // Mark as read if unread and not pending
-    if (!readAt && !markingReadIdsRef.current.has(deliveryId)) {
-      markingReadIdsRef.current.add(deliveryId);
-      try {
-        await supabaseDataService.markNotificationReadAtomic(deliveryId);
-        await fetchNotificationsData(false);
-      } catch (err) {
-        console.error("markNotificationReadAtomic failed:", err);
-      } finally {
-        markingReadIdsRef.current.delete(deliveryId);
-      }
-    }
-
-    // Determine target tab and navigate
+    // 1. Immediately determine target tab, close panel, and navigate
     const targetTab = getTargetTab(entityType, eventType);
+    setIsOpen(false);
     if (targetTab) {
       onNavigate(targetTab);
     }
 
-    setIsOpen(false);
+    // 2. Mark as read if unread and not already pending
+    if (!readAt && !markingReadIdsRef.current.has(deliveryId)) {
+      markingReadIdsRef.current.add(deliveryId);
+
+      // Optimistic state update
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n.deliveryId === deliveryId
+            ? { ...n, readAt: new Date().toISOString() }
+            : n
+        )
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+
+      // Background RPC execution & state verification
+      (async () => {
+        try {
+          await supabaseDataService.markNotificationReadAtomic(deliveryId);
+        } catch (err) {
+          console.error("markNotificationReadAtomic failed:", err);
+        } finally {
+          markingReadIdsRef.current.delete(deliveryId);
+          void executeRefresh();
+        }
+      })();
+    }
   };
 
   // Mark All Notifications Read Handler
@@ -256,7 +316,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
 
     try {
       await supabaseDataService.markAllNotificationsReadAtomic();
-      await fetchNotificationsData(false);
+      await executeRefresh();
     } catch (err: any) {
       console.error("markAllNotificationsReadAtomic error:", err);
       setError("Tümünü okundu işaretlerken hata oluştu.");
@@ -376,10 +436,11 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
                   const isUnread = !n.readAt;
 
                   return (
-                    <div
+                    <button
                       key={n.deliveryId}
-                      onClick={() => void handleNotificationClick(n)}
-                      className={`p-3.5 transition-colors cursor-pointer flex items-start gap-3 relative ${
+                      type="button"
+                      onClick={() => handleNotificationClick(n)}
+                      className={`w-full text-left p-3.5 transition-colors cursor-pointer flex items-start gap-3 relative ${
                         isUnread
                           ? 'bg-slate-50/90 hover:bg-slate-100/80 font-medium'
                           : 'bg-white hover:bg-slate-50/80 opacity-80'
@@ -416,7 +477,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
                           </span>
                         )}
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
