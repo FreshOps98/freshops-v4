@@ -62,6 +62,7 @@ import { localDataService } from './services/localDataService';
 import { testSupabaseConnection, countSupabaseRows, migrateLocalDataToSupabase } from './services/supabaseDataService';
 import { supabase } from './lib/supabaseClient';
 import { LoginScreen } from './components/Auth/LoginScreen';
+import { NotificationCenter } from './components/notifications/NotificationCenter';
 
 // Safe helper functions
 export function safeNumber(value: unknown, fallback = 0): number {
@@ -3320,6 +3321,13 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-3">
+            {session?.user?.id && (
+              <NotificationCenter
+                currentUserId={session.user.id}
+                onNavigate={setActiveTab}
+              />
+            )}
+
             <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-lg text-xs font-semibold text-emerald-800">
               <Activity size={14} className="text-emerald-500 animate-pulse" />
               <span>Üretim Hattı Aktif</span>

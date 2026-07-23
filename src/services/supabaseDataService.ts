@@ -24,7 +24,8 @@ import {
   UpdateRawMaterialReceiptInput,
   UpdateRawMaterialReceiptResult,
   RawMaterialReceiptCorrection,
-  KunyeStatus
+  KunyeStatus,
+  InAppNotification
 } from '../types';
 import { generateId } from './localDataService';
 import { supabase } from '../lib/supabaseClient';
@@ -34,6 +35,25 @@ function toNumber(value: unknown, fallback = 0): number {
   if (value === undefined || value === null || value === '') return fallback;
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
+}
+
+export function dbToInAppNotification(row: any): InAppNotification {
+  return {
+    deliveryId: row.delivery_id || '',
+    eventId: row.event_id || '',
+    eventType: row.event_type || '',
+    title: row.title || '',
+    message: row.message || '',
+    severity: row.severity || 'info',
+    payload: (row.payload && typeof row.payload === 'object') ? row.payload : {},
+    entityType: row.entity_type || '',
+    entityId: row.entity_id || '',
+    actorUserId: row.actor_user_id || null,
+    actorEmail: row.actor_email || null,
+    occurredAt: row.occurred_at || new Date().toISOString(),
+    readAt: row.read_at || null,
+    deliveryCreatedAt: row.delivery_created_at || new Date().toISOString()
+  };
 }
 
 // ==========================================
@@ -1785,8 +1805,57 @@ export const supabaseDataService = {
       createdBy: row.created_by,
       createdAt: row.created_at
     }));
+  },
+
+  async getInAppNotifications(
+    limit = 30,
+    before: string | null = null,
+    unreadOnly = false
+  ): Promise<InAppNotification[]> {
+    const { data, error } = await supabase.rpc('get_in_app_notifications', {
+      p_limit: limit,
+      p_before: before,
+      p_unread_only: unreadOnly
+    });
+    if (error) {
+      console.error('getInAppNotifications error:', error);
+      throw error;
+    }
+    return (data || []).map(dbToInAppNotification);
+  },
+
+  async getUnreadNotificationCount(): Promise<number> {
+    const { data, error } = await supabase.rpc('get_unread_notification_count');
+    if (error) {
+      console.error('getUnreadNotificationCount error:', error);
+      throw error;
+    }
+    return toNumber(data, 0);
+  },
+
+  async markNotificationReadAtomic(
+    deliveryId: string
+  ): Promise<{ success: boolean; deliveryId?: string; alreadyRead?: boolean; readAt?: string }> {
+    const { data, error } = await supabase.rpc('mark_notification_read_atomic', {
+      p_delivery_id: deliveryId
+    });
+    if (error) {
+      console.error('markNotificationReadAtomic error:', error);
+      throw error;
+    }
+    return data;
+  },
+
+  async markAllNotificationsReadAtomic(): Promise<{ success: boolean; updatedCount?: number }> {
+    const { data, error } = await supabase.rpc('mark_all_notifications_read_atomic');
+    if (error) {
+      console.error('markAllNotificationsReadAtomic error:', error);
+      throw error;
+    }
+    return data;
   }
 };
+
 
 // ==========================================
 // MIGRATION AND UTILITY FUNCTIONS

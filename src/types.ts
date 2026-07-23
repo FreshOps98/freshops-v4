@@ -772,6 +772,25 @@ export interface SupplierTraceabilityResponse {
   receipts: SupplierTraceabilityReceipt[];
 }
 
+export type NotificationSeverity = 'info' | 'success' | 'warning' | 'critical' | string;
+
+export interface InAppNotification {
+  deliveryId: string;
+  eventId: string;
+  eventType: string;
+  title: string;
+  message: string;
+  severity: NotificationSeverity;
+  payload: Record<string, unknown>;
+  entityType: string;
+  entityId: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  occurredAt: string;
+  readAt: string | null;
+  deliveryCreatedAt: string;
+}
+
 
 
 
