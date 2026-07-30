@@ -220,7 +220,31 @@ export interface FinishedGoodsStock {
   lotDateOffsetDays?: number;
 }
 
-export type FinishedGoodsMovementType = 'Üretim girişi' | 'Sevkiyat çıkışı' | 'Fire çıkışı' | 'İptal' | 'Sayım düzeltmesi' | 'Üretim Geri Alındı' | 'Üretim Geri Alma';
+export type FinishedGoodsMovementType = 'Üretim girişi' | 'Sevkiyat çıkışı' | 'Fire çıkışı' | 'İptal' | 'Sayım düzeltmesi' | 'Sayım Düzeltmesi' | 'Üretim Geri Alındı' | 'Üretim Geri Alma';
+
+export interface FinishedGoodsStockAdjustmentItem {
+  stockId: string;
+  expectedPreviousQuantity: number;
+  newRemaining: number;
+}
+
+export interface AdjustFinishedGoodsStockRequest {
+  adjustments: FinishedGoodsStockAdjustmentItem[];
+  reason: string;
+  movementDate: string;
+  note?: string;
+  idempotencyKey?: string;
+}
+
+export interface AdjustFinishedGoodsStockResult {
+  success: boolean;
+  alreadyApplied?: boolean;
+  noChanges?: boolean;
+  adjustmentCount?: number;
+  orderIds?: string[];
+  movementIds?: string[];
+  error?: string;
+}
 
 export interface FinishedGoodsMovement {
   id: string;
@@ -245,6 +269,7 @@ export interface FinishedGoodsMovement {
   difference?: number;
   adjustmentQuantity?: number;
   lotNo?: string;
+  idempotencyKey?: string;
 }
 
 export type WasteReason = 'Kabuk' | 'Çekirdek' | 'Ezilme' | 'Çürük' | 'Gramaj sapması' | 'Üretim hatası' | 'Müşteri iptali' | 'Diğer';

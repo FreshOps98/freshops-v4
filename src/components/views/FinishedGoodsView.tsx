@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Product, 
   Order, 
@@ -8,7 +8,10 @@ import {
   Customer, 
   FinishedGoodsStock, 
   FinishedGoodsMovement,
-  FinishedGoodsStatus
+  FinishedGoodsStatus,
+  AdjustFinishedGoodsStockRequest,
+  FinishedGoodsStockAdjustmentItem,
+  ProductionTraceabilityResponse
 } from '../../types';
 import { formatDate, formatShortDate } from '../../utils/format';
 import { getOrderDisplayNumber } from '../../services/calcService';
@@ -31,7 +34,6 @@ import {
 import { getTodayISO, getTomorrowISO } from '../../utils/dateHelper';
 import { supabaseDataService } from '../../services/supabaseDataService';
 import { ProductionTraceabilityModal } from '../traceability/ProductionTraceabilityModal';
-import { ProductionTraceabilityResponse } from '../../types';
 
 interface FinishedGoodsViewProps {
   products: Product[];
@@ -46,14 +48,8 @@ interface FinishedGoodsViewProps {
   onUpdateFinishedGood: (id: string, updates: Partial<FinishedGoodsStock>) => void;
   onDeleteFinishedGood: (id: string) => void;
   onAdjustFinishedGoodsStock?: (
-    idOrAdjustments: any,
-    newRemainingOrReason: any,
-    reasonOrDate: string,
-    dateOrNote: string,
-    noteOrLotNo?: string,
-    overallPreviousRemaining?: number,
-    overallNewRemaining?: number
-  ) => void;
+    request: AdjustFinishedGoodsStockRequest
+  ) => Promise<boolean> | void;
   onUndoFinishedGoodsShipment?: (movementId: string, reason?: string) => boolean | Promise<boolean>;
 }
 
@@ -118,6 +114,8 @@ export default function FinishedGoodsView({
   // Modals state
   const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState(false);
   const [selectedDetailGroup, setSelectedDetailGroup] = useState<DetailGroup | null>(null);
+  const [isCorrectionSaving, setIsCorrectionSaving] = useState(false);
+  const correctionIdempotencyKeyRef = useRef<string | null>(null);
 
   // Traceability Modal states
   const [isTraceabilityModalOpen, setIsTraceabilityModalOpen] = useState(false);
@@ -572,9 +570,9 @@ export default function FinishedGoodsView({
   };
 
   // Dedicated Stock Correction / Adjustment submit
-  const handleCorrectionSubmit = (e: React.FormEvent) => {
+  const handleCorrectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedDetailGroup) return;
+    if (!selectedDetailGroup || isCorrectionSaving) return;
 
     if (correctRemaining === undefined || correctRemaining === null || correctRemaining.trim() === '') {
       alert('Bu alan boş bırakılamaz.');
@@ -591,51 +589,109 @@ export default function FinishedGoodsView({
       return;
     }
 
-    // Distribute newRemaining among selectedDetailGroup.stocks
-    let remainingToDistribute = newRemaining;
+    const currentTotalRemaining = selectedDetailGroup.stocks.reduce(
+      (sum, s) => sum + (s.quantityRemaining || 0),
+      0
+    );
+
+    if (newRemaining === currentTotalRemaining) {
+      alert('Stok miktarında bir değişiklik yapılmadı.');
+      return;
+    }
+
+    // Sort stocks chronologically (by productionDate, then createdAt, then id)
     const sortedStocks = [...selectedDetailGroup.stocks].sort((a, b) => {
       const dateA = a.productionDate || a.createdAt || '';
       const dateB = b.productionDate || b.createdAt || '';
-      return dateA.localeCompare(dateB);
+      const dateCmp = dateA.localeCompare(dateB);
+      if (dateCmp !== 0) return dateCmp;
+      return a.id.localeCompare(b.id);
     });
 
-    const adjustments: { id: string; newRemaining: number }[] = [];
+    const adjustments: FinishedGoodsStockAdjustmentItem[] = [];
 
-    for (let i = 0; i < sortedStocks.length; i++) {
-      const s = sortedStocks[i];
-      let targetRemainingForStock = 0;
-      if (i === sortedStocks.length - 1) {
-        targetRemainingForStock = Math.max(0, Math.min(remainingToDistribute, s.quantityProduced));
-      } else {
-        targetRemainingForStock = Math.min(remainingToDistribute, s.quantityProduced);
-        remainingToDistribute -= targetRemainingForStock;
+    if (newRemaining < currentTotalRemaining) {
+      // Toplam azaltılıyor: yalnız gerekli delta kadar stoklardan azalt
+      let deltaToRemove = currentTotalRemaining - newRemaining;
+      for (const s of sortedStocks) {
+        const curRem = s.quantityRemaining || 0;
+        if (deltaToRemove > 0 && curRem > 0) {
+          const reduction = Math.min(deltaToRemove, curRem);
+          const stockNewRem = curRem - reduction;
+          adjustments.push({
+            stockId: s.id,
+            expectedPreviousQuantity: curRem,
+            newRemaining: stockNewRem
+          });
+          deltaToRemove -= reduction;
+        }
       }
-
-      adjustments.push({ id: s.id, newRemaining: targetRemainingForStock });
-
-      if (!onAdjustFinishedGoodsStock) {
-        onUpdateFinishedGood(s.id, {
-          quantityRemaining: targetRemainingForStock,
-          note: `${s.note || ''} (Stok Düzeltme: ${correctReason} - ${targetRemainingForStock} Adet, ${correctNote})`.trim()
-        });
+    } else {
+      // Toplam artırılıyor: yalnız gerekli delta kadar, quantityProduced sınırına kadar artır
+      let deltaToAdd = newRemaining - currentTotalRemaining;
+      for (const s of sortedStocks) {
+        const curRem = s.quantityRemaining || 0;
+        const maxCanAdd = Math.max(0, s.quantityProduced - curRem);
+        if (deltaToAdd > 0 && maxCanAdd > 0) {
+          const addition = Math.min(deltaToAdd, maxCanAdd);
+          const stockNewRem = curRem + addition;
+          adjustments.push({
+            stockId: s.id,
+            expectedPreviousQuantity: curRem,
+            newRemaining: stockNewRem
+          });
+          deltaToAdd -= addition;
+        }
       }
     }
 
-    if (onAdjustFinishedGoodsStock) {
-      onAdjustFinishedGoodsStock(
+    if (adjustments.length === 0) {
+      alert('Stok miktarında bir değişiklik yapılmadı.');
+      return;
+    }
+
+    if (!correctionIdempotencyKeyRef.current) {
+      correctionIdempotencyKeyRef.current = crypto.randomUUID();
+    }
+    const idempotencyKey = correctionIdempotencyKeyRef.current;
+
+    setIsCorrectionSaving(true);
+
+    try {
+      const request: AdjustFinishedGoodsStockRequest = {
         adjustments,
-        correctReason,
-        correctDate,
-        correctNote,
-        selectedDetailGroup.lotNo,
-        selectedDetailGroup.quantityRemaining,
-        newRemaining
-      );
-    }
+        reason: correctReason,
+        movementDate: correctDate,
+        note: correctNote,
+        idempotencyKey
+      };
 
-    alert(`${newRemaining} Adet yeni kalan miktar ${selectedDetailGroup.lotNo} partisi için kaydedildi!`);
-    setIsCorrectionModalOpen(false);
-    setSelectedDetailGroup(null);
+      let success = false;
+      if (onAdjustFinishedGoodsStock) {
+        const result = await onAdjustFinishedGoodsStock(request);
+        success = result !== false;
+      } else {
+        for (const adj of adjustments) {
+          const s = selectedDetailGroup.stocks.find(st => st.id === adj.stockId);
+          onUpdateFinishedGood(adj.stockId, {
+            quantityRemaining: adj.newRemaining,
+            note: `${s?.note || ''} (Stok Düzeltme: ${correctReason} - ${adj.newRemaining} Adet, ${correctNote})`.trim()
+          });
+        }
+        success = true;
+      }
+
+      if (success) {
+        alert(`${newRemaining} Adet yeni kalan miktar ${selectedDetailGroup.lotNo} partisi için kaydedildi!`);
+        setIsCorrectionModalOpen(false);
+        setSelectedDetailGroup(null);
+        correctionIdempotencyKeyRef.current = null;
+      }
+    } catch (err) {
+      console.error("Stok düzeltme işlemi sırasında hata oluştu:", err);
+    } finally {
+      setIsCorrectionSaving(false);
+    }
   };
 
   // CARD CALCULATIONS
@@ -1107,6 +1163,7 @@ export default function FinishedGoodsView({
                                               setCorrectReason('Sayım Farkı');
                                               setCorrectDate(getTodayISO());
                                               setCorrectNote('');
+                                              correctionIdempotencyKeyRef.current = crypto.randomUUID();
                                               setIsCorrectionModalOpen(true);
                                             }}
                                             className="px-2.5 py-1 text-amber-600 hover:bg-amber-50 border border-amber-200 rounded-lg cursor-pointer inline-flex items-center gap-1 font-bold text-[10px]"
@@ -1406,9 +1463,10 @@ export default function FinishedGoodsView({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-amber-500 text-white font-semibold rounded-lg hover:bg-amber-600 cursor-pointer shadow-sm"
+                  disabled={isCorrectionSaving}
+                  className="px-4 py-2 bg-amber-500 text-white font-semibold rounded-lg hover:bg-amber-600 cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Düzeltmeyi Kaydet
+                  {isCorrectionSaving ? 'Kaydediliyor...' : 'Düzeltmeyi Kaydet'}
                 </button>
               </div>
             </form>

@@ -20,7 +20,9 @@ import {
   RawMaterialLot,
   CreateRawMaterialReceiptInput,
   UpdateRawMaterialReceiptInput,
-  UpdateRawMaterialReceiptResult
+  UpdateRawMaterialReceiptResult,
+  AdjustFinishedGoodsStockRequest,
+  FinishedGoodsStockAdjustmentItem
 } from './types';
 import { formatCurrency } from './utils/format';
 import { getTodayISO, getTomorrowISO, parseISODateSafe } from './utils/dateHelper';
@@ -2984,137 +2986,131 @@ export default function App() {
     setFinishedGoodsStocks(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
   };
 
-  const handleAdjustFinishedGoodsStock = (
-    idOrAdjustments: string | { id: string; newRemaining: number }[],
-    secondArg: any,
-    thirdArg: string,
-    fourthArg: string,
+  const handleAdjustFinishedGoodsStock = async (
+    requestOrAdjustments: AdjustFinishedGoodsStockRequest | string | { id: string; newRemaining: number }[],
+    secondArg?: any,
+    thirdArg?: string,
+    fourthArg?: string,
     fifthArg?: string,
     overallPreviousRemaining?: number,
     overallNewRemaining?: number
-  ) => {
-    if (typeof idOrAdjustments === 'string') {
-      const id = idOrAdjustments;
-      const newRemaining = secondArg as number;
-      const reason = thirdArg;
-      const date = fourthArg;
-      const note = fifthArg || '';
+  ): Promise<boolean> => {
+    let request: AdjustFinishedGoodsStockRequest;
 
-      const stock = finishedGoodsStocks.find(s => s.id === id);
-      if (!stock) return;
+    if (
+      typeof requestOrAdjustments === 'object' &&
+      requestOrAdjustments !== null &&
+      'adjustments' in requestOrAdjustments
+    ) {
+      request = requestOrAdjustments as AdjustFinishedGoodsStockRequest;
+    } else {
+      let adjustmentsList: FinishedGoodsStockAdjustmentItem[] = [];
+      let reason = '';
+      let date = getTodayISO();
+      let note = '';
 
-      const previousQuantity = stock.quantityRemaining;
-      const difference = newRemaining - previousQuantity;
-      const adjustmentQuantity = Math.abs(difference);
-
-      // 1. Update stock
-      setFinishedGoodsStocks(prev => prev.map(item => {
-        if (item.id === id) {
+      if (typeof requestOrAdjustments === 'string') {
+        const id = requestOrAdjustments;
+        const newRemaining = secondArg as number;
+        reason = thirdArg || '';
+        date = fourthArg || date;
+        note = fifthArg || '';
+        const stock = finishedGoodsStocks.find(s => s.id === id);
+        adjustmentsList = [{
+          stockId: id,
+          expectedPreviousQuantity: stock ? stock.quantityRemaining : 0,
+          newRemaining
+        }];
+      } else {
+        const adjs = requestOrAdjustments as { id: string; newRemaining: number }[];
+        reason = secondArg as string;
+        date = thirdArg || date;
+        note = fourthArg || '';
+        adjustmentsList = adjs.map(a => {
+          const s = finishedGoodsStocks.find(st => st.id === a.id);
           return {
-            ...item,
-            quantityRemaining: newRemaining,
-            note: `${item.note || ''} (Stok Düzeltme: ${reason} - ${newRemaining} Adet, ${note})`.trim(),
-            updatedAt: new Date().toISOString()
+            stockId: a.id,
+            expectedPreviousQuantity: s ? s.quantityRemaining : 0,
+            newRemaining: a.newRemaining
           };
+        });
+      }
+
+      request = {
+        adjustments: adjustmentsList,
+        reason,
+        movementDate: date,
+        note
+      };
+    }
+
+    if (USE_SUPABASE) {
+      try {
+        const result = await supabaseDataService.adjustFinishedGoodsStockAtomic(request);
+        if (result && result.success) {
+          const [stocks, movements, ordersList] = await Promise.all([
+            supabaseDataService.getFinishedGoods(),
+            supabaseDataService.getFinishedGoodsMovements(),
+            supabaseDataService.getOrders()
+          ]);
+          setFinishedGoodsStocks(stocks.map(normalizeFinishedGoodsStock));
+          setFinishedGoodsMovements(movements);
+          setOrders(ordersList.map(normalizeOrder));
+          return true;
+        } else {
+          console.error("adjustFinishedGoodsStockAtomic error:", result);
+          alert(result?.error || 'Stok düzeltme işlemi veritabanında gerçekleştirilemedi.');
+          return false;
         }
-        return item;
-      }));
-
-      // 2. Create FinishedGoodsMovement if there is a difference
-      if (difference !== 0) {
-        const newMovement: FinishedGoodsMovement = {
-          id: 'fgm_adj_' + Math.random().toString(36).substring(2, 9),
-          finishedGoodsStockId: id,
-          productId: stock.productId,
-          customerId: stock.customerId,
-          orderId: stock.orderId,
-          orderItemId: stock.orderItemId,
-          type: 'Sayım düzeltmesi',
-          quantity: adjustmentQuantity,
-          date: date || new Date().toISOString().split('T')[0],
-          note: `${reason}: ${previousQuantity} → ${newRemaining} Adet. ${note}`.trim(),
-          createdAt: new Date().toISOString(),
-          isDeleted: false,
-          movementType: 'stock_adjustment',
-          isShipment: false,
-          reason: reason,
-          previousQuantity: previousQuantity,
-          newQuantity: newRemaining,
-          difference: difference,
-          adjustmentQuantity: adjustmentQuantity,
-          lotNo: stock.lotNo
-        };
-
-        setFinishedGoodsMovements(prev => [...prev, newMovement]);
+      } catch (err: any) {
+        console.error("adjustFinishedGoodsStockAtomic exception:", err);
+        alert('Stok düzeltme hatası: ' + (err?.message || err));
+        return false;
       }
     } else {
-      const adjustments = idOrAdjustments;
-      const reason = secondArg as string;
-      const date = thirdArg;
-      const note = fourthArg;
-      const lotNo = fifthArg;
+      for (const adj of request.adjustments) {
+        setFinishedGoodsStocks(prev => prev.map(item => {
+          if (item.id === adj.stockId) {
+            return {
+              ...item,
+              quantityRemaining: adj.newRemaining,
+              note: `${item.note || ''} (Stok Düzeltme: ${request.reason} - ${adj.newRemaining} Adet, ${request.note || ''})`.trim(),
+              updatedAt: new Date().toISOString()
+            };
+          }
+          return item;
+        }));
 
-      if (adjustments.length === 0) return;
-
-      // 1. Update stock items in batch
-      setFinishedGoodsStocks(prev => prev.map(item => {
-        const adj = adjustments.find(a => a.id === item.id);
-        if (adj) {
-          return {
-            ...item,
-            quantityRemaining: adj.newRemaining,
-            note: `${item.note || ''} (Stok Düzeltme: ${reason} - ${adj.newRemaining} Adet, ${note})`.trim(),
-            updatedAt: new Date().toISOString()
+        const stock = finishedGoodsStocks.find(s => s.id === adj.stockId);
+        const prevQty = adj.expectedPreviousQuantity;
+        const diff = adj.newRemaining - prevQty;
+        if (diff !== 0 && stock) {
+          const newMovement: FinishedGoodsMovement = {
+            id: 'fgm_adj_' + Math.random().toString(36).substring(2, 9),
+            finishedGoodsStockId: stock.id,
+            productId: stock.productId,
+            customerId: stock.customerId,
+            orderId: stock.orderId,
+            orderItemId: stock.orderItemId,
+            type: 'Sayım Düzeltmesi',
+            quantity: Math.abs(diff),
+            date: request.movementDate || getTodayISO(),
+            note: `${request.reason}: ${prevQty} → ${adj.newRemaining} Adet. ${request.note || ''}`.trim(),
+            createdAt: new Date().toISOString(),
+            isDeleted: false,
+            movementType: 'stock_adjustment',
+            isShipment: false,
+            reason: request.reason,
+            previousQuantity: prevQty,
+            newQuantity: adj.newRemaining,
+            difference: diff,
+            adjustmentQuantity: Math.abs(diff),
+            lotNo: stock.lotNo
           };
+          setFinishedGoodsMovements(prev => [...prev, newMovement]);
         }
-        return item;
-      }));
-
-      // Grab first stock item to fetch metadata
-      const firstAdj = adjustments[0];
-      const stock = finishedGoodsStocks.find(s => s.id === firstAdj.id);
-      if (!stock) return;
-
-      const prevTotal = overallPreviousRemaining !== undefined
-        ? overallPreviousRemaining
-        : adjustments.reduce((sum, adj) => {
-            const s = finishedGoodsStocks.find(st => st.id === adj.id);
-            return sum + (s ? s.quantityRemaining : 0);
-          }, 0);
-
-      const newTotal = overallNewRemaining !== undefined
-        ? overallNewRemaining
-        : adjustments.reduce((sum, adj) => sum + adj.newRemaining, 0);
-
-      const difference = newTotal - prevTotal;
-      const adjustmentQuantity = Math.abs(difference);
-
-      if (difference !== 0) {
-        const newMovement: FinishedGoodsMovement = {
-          id: 'fgm_adj_' + Math.random().toString(36).substring(2, 9),
-          finishedGoodsStockId: stock.id,
-          productId: stock.productId,
-          customerId: stock.customerId,
-          orderId: stock.orderId,
-          orderItemId: stock.orderItemId,
-          type: 'Sayım düzeltmesi',
-          quantity: adjustmentQuantity,
-          date: date || new Date().toISOString().split('T')[0],
-          note: `${reason}: ${prevTotal} → ${newTotal} Adet. ${note}`.trim(),
-          createdAt: new Date().toISOString(),
-          isDeleted: false,
-          movementType: 'stock_adjustment',
-          isShipment: false,
-          reason: reason,
-          previousQuantity: prevTotal,
-          newQuantity: newTotal,
-          difference: difference,
-          adjustmentQuantity: adjustmentQuantity,
-          lotNo: lotNo || stock.lotNo
-        };
-
-        setFinishedGoodsMovements(prev => [...prev, newMovement]);
       }
+      return true;
     }
   };
 

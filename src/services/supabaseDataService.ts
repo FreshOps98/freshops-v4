@@ -25,7 +25,9 @@ import {
   UpdateRawMaterialReceiptResult,
   RawMaterialReceiptCorrection,
   KunyeStatus,
-  InAppNotification
+  InAppNotification,
+  AdjustFinishedGoodsStockRequest,
+  AdjustFinishedGoodsStockResult
 } from '../types';
 import { generateId } from './localDataService';
 import { supabase } from '../lib/supabaseClient';
@@ -1853,6 +1855,31 @@ export const supabaseDataService = {
       throw error;
     }
     return data;
+  },
+
+  async adjustFinishedGoodsStockAtomic(
+    request: AdjustFinishedGoodsStockRequest
+  ): Promise<AdjustFinishedGoodsStockResult> {
+    const formattedAdjustments = request.adjustments.map(adj => ({
+      stock_id: adj.stockId,
+      expected_previous_quantity: adj.expectedPreviousQuantity,
+      new_remaining: adj.newRemaining
+    }));
+
+    const { data, error } = await supabase.rpc('adjust_finished_goods_stock_atomic', {
+      p_adjustments: formattedAdjustments,
+      p_reason: request.reason,
+      p_movement_date: request.movementDate,
+      p_note: request.note || null,
+      p_idempotency_key: request.idempotencyKey || null
+    });
+
+    if (error) {
+      console.error('adjustFinishedGoodsStockAtomic RPC error:', error);
+      throw error;
+    }
+
+    return data as AdjustFinishedGoodsStockResult;
   }
 };
 

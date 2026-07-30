@@ -911,15 +911,15 @@ export function calculateOrderItemOperationalSummary(
       // 4. Exclude quantityRemaining <= 0
       if ((f.quantityRemaining || 0) <= 0) return false;
 
-      // 5. Connection match (either orderItemId directly or fallback)
+      // 5. Connection match (orderItemId takes strict priority; fallback only for legacy empty orderItemId)
+      if (f.orderItemId) {
+        return f.orderItemId === orderItemId;
+      }
+
+      // Legacy Fallback matching (only when f.orderItemId is null/undefined/empty)
       const targetOrderId = orderId || (productionPlanItems && productionPlanItems.find(pi => pi.orderItemId === orderItemId)?.orderId);
       const targetProductId = productId || (productionPlanItems && productionPlanItems.find(pi => pi.orderItemId === orderItemId)?.productId);
 
-      if (f.orderItemId === orderItemId) {
-        return true;
-      }
-
-      // Fallback matching
       if (targetOrderId && targetProductId) {
         return f.orderId === targetOrderId && f.productId === targetProductId;
       }
