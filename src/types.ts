@@ -828,6 +828,27 @@ export interface InAppNotification {
   deliveryCreatedAt: string;
 }
 
+export interface ActiveLotBalance {
+  id: string;
+  internalLotNo: string;
+  quantityReceived: number;
+  quantityRemaining: number;
+  unit: string;
+  unitPrice: number;
+  kunyeStatus: string;
+  kunyeNumber: string | null;
+  rawMaterialId: string;
+  rawMaterialName: string;
+  rawMaterialReceiptId: string;
+  receiptDate: string;
+  invoiceNumber: string | null;
+  dispatchNoteNumber: string | null;
+  supplierId: string | null;
+  supplierName: string;
+  createdAt: string;
+}
+
+
 
 
 

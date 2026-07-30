@@ -374,6 +374,8 @@ BEGIN
     jsonb_agg(
       jsonb_build_object(
         'id', id,
+        'name', name,
+        'unit', unit,
         'purchase_price', purchase_price,
         'average_cost', average_cost,
         'current_stock', current_stock
@@ -755,11 +757,8 @@ BEGIN
       AND organization_id = v_org_id;
 
     IF ABS(v_total_remaining_qty - v_current_stock) > 0.0001 THEN
-      UPDATE public.raw_materials
-      SET current_stock = v_total_remaining_qty,
-          updated_at = NOW()
-      WHERE id = v_recalc_rm_id
-        AND organization_id = v_org_id;
+      RAISE EXCEPTION 'Hammadde (ID: %) için mevcut stok (%) ile aktif lot bakiyeleri toplamı (%) arasında uyuşmazlık bulunmaktadır. İşlem güvenlik nedeniyle iptal edildi.',
+        v_recalc_rm_id, v_current_stock, v_total_remaining_qty;
     END IF;
   END LOOP;
 
@@ -844,6 +843,8 @@ BEGIN
     jsonb_agg(
       jsonb_build_object(
         'id', id,
+        'name', name,
+        'unit', unit,
         'purchase_price', purchase_price,
         'average_cost', average_cost,
         'current_stock', current_stock

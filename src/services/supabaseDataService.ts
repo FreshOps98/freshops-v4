@@ -27,7 +27,8 @@ import {
   KunyeStatus,
   InAppNotification,
   AdjustFinishedGoodsStockRequest,
-  AdjustFinishedGoodsStockResult
+  AdjustFinishedGoodsStockResult,
+  ActiveLotBalance
 } from '../types';
 import { generateId } from './localDataService';
 import { supabase } from '../lib/supabaseClient';
@@ -1699,6 +1700,74 @@ export const supabaseDataService = {
       .order('created_at', { ascending: false });
     if (error) throw error;
     return (data || []).map(dbToRawMaterialLot);
+  },
+
+  async getActiveRawMaterialLotBalances(): Promise<ActiveLotBalance[]> {
+    const { data, error } = await supabase
+      .from('raw_material_lots')
+      .select(`
+        id,
+        internal_lot_no,
+        quantity_received,
+        quantity_remaining,
+        unit,
+        unit_price,
+        kunye_status,
+        kunye_number,
+        raw_material_id,
+        raw_material_receipt_id,
+        created_at,
+        raw_material_receipts!inner (
+          id,
+          receipt_date,
+          invoice_number,
+          dispatch_note_number,
+          is_deleted,
+          supplier_id,
+          suppliers (
+            id,
+            name
+          )
+        ),
+        raw_materials!inner (
+          id,
+          name,
+          unit
+        )
+      `)
+      .eq('is_deleted', false)
+      .gt('quantity_remaining', 0)
+      .eq('raw_material_receipts.is_deleted', false)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    if (!data) return [];
+
+    return data.map((row: any) => {
+      const receipt = row.raw_material_receipts;
+      const supplier = receipt?.suppliers;
+      const rm = row.raw_materials;
+
+      return {
+        id: row.id,
+        internalLotNo: row.internal_lot_no,
+        quantityReceived: toNumber(row.quantity_received),
+        quantityRemaining: toNumber(row.quantity_remaining),
+        unit: rm?.unit || row.unit || 'kg',
+        unitPrice: toNumber(row.unit_price),
+        kunyeStatus: row.kunye_status || 'not_applicable',
+        kunyeNumber: row.kunye_number || null,
+        rawMaterialId: row.raw_material_id,
+        rawMaterialName: rm?.name || '—',
+        rawMaterialReceiptId: row.raw_material_receipt_id,
+        receiptDate: receipt?.receipt_date || row.created_at,
+        invoiceNumber: receipt?.invoice_number || null,
+        dispatchNoteNumber: receipt?.dispatch_note_number || null,
+        supplierId: receipt?.supplier_id || supplier?.id || null,
+        supplierName: supplier?.name || '—',
+        createdAt: row.created_at
+      };
+    });
   },
 
   async createOrGetSupplierAtomic(name: string, note?: string): Promise<{ supplierId: string; name: string; created: boolean }> {
