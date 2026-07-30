@@ -22,7 +22,7 @@ import React, { useState } from 'react';
 import { RawMaterial, StockMovement, StockMovementType, Order, OrderItem, Product, ProductRecipeItem, CostSettings, ProductionRun, FinishedGoodsStock, FinishedGoodsMovement, Supplier, RawMaterialReceipt, RawMaterialLot, CreateRawMaterialReceiptInput, RawMaterialReceiptLineInput, UpdateRawMaterialReceiptInput, UpdateRawMaterialReceiptResult, KunyeStatus } from '../../types';
 import { calculateUnifiedRawMaterialNeeds, calculateWeightedAverageCost } from '../../services/calcService';
 import { formatCurrency, formatWeight, formatDate, formatShortDate } from '../../utils/format';
-import { Plus, Search, HelpCircle, History, Info, AlertTriangle, ArrowUpRight, ArrowDownLeft, Trash2, Edit2, Calendar, X, Sliders, Edit3 } from 'lucide-react';
+import { Plus, Search, HelpCircle, History, Info, AlertTriangle, ArrowUpRight, ArrowDownLeft, Trash2, Edit2, Calendar, X, Sliders, Edit3, ChevronDown, ChevronUp } from 'lucide-react';
 import { getTodayISO, getTomorrowISO } from '../../utils/dateHelper';
 import RawMaterialReceiptCorrectionModal from '../purchases/RawMaterialReceiptCorrectionModal';
 
@@ -82,6 +82,14 @@ export default function StockView({
   const [isReceiptCorrectionModalOpen, setIsReceiptCorrectionModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'status' | 'movements' | 'purchase_history'>('status');
   const [stockMovementPage, setStockMovementPage] = useState<number>(1);
+  const [expandedMaterialLots, setExpandedMaterialLots] = useState<Record<string, boolean>>({});
+
+  const toggleExpandMaterialLots = (rmId: string) => {
+    setExpandedMaterialLots(prev => ({
+      ...prev,
+      [rmId]: !prev[rmId]
+    }));
+  };
 
   // Selected Stock Movement for Editing
   const [editingMovement, setEditingMovement] = useState<StockMovement | null>(null);
@@ -685,6 +693,7 @@ export default function StockView({
                   <tr className="bg-slate-50/70 border-b border-slate-100 text-slate-400 font-semibold uppercase">
                     <th className="py-3 px-4">Hammadde Adı</th>
                     <th className="py-3 px-4 text-right">Mevcut Stok</th>
+                    <th className="py-3 px-4 text-center">Lot Bakiyeleri</th>
                     <th className="py-3 px-4 text-right">Kritik Limit</th>
                     <th className="py-3 px-4 text-right">Son Alış Fiyatı</th>
                     <th className="py-3 px-4 text-right">Ortalama Maliyet</th>
@@ -699,13 +708,15 @@ export default function StockView({
                 <tbody className="divide-y divide-slate-100 text-slate-600">
                   {filteredMaterials.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="text-center py-10 text-slate-400 bg-white font-medium">
+                      <td colSpan={12} className="text-center py-10 text-slate-400 bg-white font-medium">
                         Sistemde kayıtlı hammadde bulunmamaktadır.
                       </td>
                     </tr>
                   ) : (
                     filteredMaterials.map((rm) => {
                       const stock = currentStocks[rm.id] || 0;
+                      const activeLotsForRm = (rawMaterialLots || []).filter(l => l.rawMaterialId === rm.id && !l.isDeleted && l.quantityRemaining > 0);
+                      const isExpanded = !!expandedMaterialLots[rm.id];
                       
                       const reqToday = todayReqs.find(r => r.rawMaterialId === rm.id);
                       const grossToday = reqToday ? reqToday.grossRequirement : 0;
@@ -724,56 +735,131 @@ export default function StockView({
                       }
 
                       return (
-                        <tr key={rm.id} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="py-3.5 px-4 font-semibold text-slate-900">{rm.name}</td>
-                          <td className="py-3.5 px-4 text-right font-bold text-slate-800">
-                            {formatWeight(stock, rm.unit)}
-                          </td>
-                          <td className="py-3.5 px-4 text-right text-slate-400">
-                            {formatWeight(rm.criticalStockLevel, rm.unit)}
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-semibold text-slate-700">
-                            {formatCurrency(rm.purchasePrice)}
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-semibold text-slate-700">
-                            {formatCurrency(rm.averageCost ?? calculateWeightedAverageCost(rm.id, activeMovements, rm.purchasePrice))}
-                          </td>
-                          <td className="py-3.5 px-4 text-slate-400 font-medium">{rm.unit}</td>
-                          <td className="py-3.5 px-4">
-                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              status === 'Eksik' ? 'bg-red-50 text-red-700 border border-red-200' :
-                              status === 'Kritik' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
-                              'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            }`}>
-                              {status}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-medium text-slate-500">
-                            {grossToday > 0 ? formatWeight(grossToday, rm.unit) : '-'}
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-medium text-slate-500">
-                            {grossTomorrow > 0 ? formatWeight(grossTomorrow, rm.unit) : '-'}
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-bold">
-                            {missingAmount > 0 ? (
-                              <span className="text-red-600">
-                                {formatWeight(missingAmount, rm.unit)} eksik
+                        <React.Fragment key={rm.id}>
+                          <tr className="hover:bg-slate-50/50 transition-colors">
+                            <td className="py-3.5 px-4 font-semibold text-slate-900">{rm.name}</td>
+                            <td className="py-3.5 px-4 text-right font-bold text-slate-800">
+                              {formatWeight(stock, rm.unit)}
+                            </td>
+                            <td className="py-3.5 px-4 text-center">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandMaterialLots(rm.id)}
+                                className={`inline-flex items-center gap-1 font-bold text-[11px] px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+                                  activeLotsForRm.length > 0 ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200' : 'text-slate-400 bg-slate-100'
+                                }`}
+                              >
+                                <span>{activeLotsForRm.length} Aktif Lot</span>
+                                {activeLotsForRm.length > 0 && (isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                              </button>
+                            </td>
+                            <td className="py-3.5 px-4 text-right text-slate-400">
+                              {formatWeight(rm.criticalStockLevel, rm.unit)}
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-semibold text-slate-700">
+                              {formatCurrency(rm.purchasePrice)}
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-semibold text-slate-700">
+                              {formatCurrency(rm.averageCost ?? calculateWeightedAverageCost(rm.id, activeMovements, rm.purchasePrice))}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-400 font-medium">{rm.unit}</td>
+                            <td className="py-3.5 px-4">
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                status === 'Eksik' ? 'bg-red-50 text-red-700 border border-red-200' :
+                                status === 'Kritik' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                                'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              }`}>
+                                {status}
                               </span>
-                            ) : (
-                              <span className="text-emerald-600">Tam</span>
-                            )}
-                          </td>
-                          <td className="py-3.5 px-4 text-right">
-                            <button
-                              onClick={() => handleOpenCorrection(rm)}
-                              className="inline-flex items-center gap-1 bg-amber-500 hover:bg-amber-600 text-white font-bold px-2.5 py-1.5 rounded-lg text-[10px] transition-all cursor-pointer"
-                              title="Stok Düzelt"
-                            >
-                              <Sliders size={11} />
-                              Stok Düzelt
-                            </button>
-                          </td>
-                        </tr>
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-medium text-slate-500">
+                              {grossToday > 0 ? formatWeight(grossToday, rm.unit) : '-'}
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-medium text-slate-500">
+                              {grossTomorrow > 0 ? formatWeight(grossTomorrow, rm.unit) : '-'}
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-bold">
+                              {missingAmount > 0 ? (
+                                <span className="text-red-600">
+                                  {formatWeight(missingAmount, rm.unit)} eksik
+                                </span>
+                              ) : (
+                                <span className="text-emerald-600">Tam</span>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4 text-right">
+                              <button
+                                onClick={() => handleOpenCorrection(rm)}
+                                className="inline-flex items-center gap-1 bg-amber-500 hover:bg-amber-600 text-white font-bold px-2.5 py-1.5 rounded-lg text-[10px] transition-all cursor-pointer"
+                                title="Stok Düzelt"
+                              >
+                                <Sliders size={11} />
+                                Stok Düzelt
+                              </button>
+                            </td>
+                          </tr>
+
+                          {isExpanded && (
+                            <tr className="bg-slate-50/80">
+                              <td colSpan={12} className="p-3">
+                                <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2">
+                                  <div className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                                    <span>"{rm.name}" Aktif Lot Bakiyeleri</span>
+                                    <span className="text-[10px] text-slate-400 font-mono">Toplam {activeLotsForRm.length} Lot</span>
+                                  </div>
+                                  {activeLotsForRm.length === 0 ? (
+                                    <div className="text-xs text-slate-400 italic py-1">Aktif stok bakiyesi olan lot bulunmuyor.</div>
+                                  ) : (
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-left text-[11px] border-collapse">
+                                        <thead>
+                                          <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px]">
+                                            <th className="py-1.5 px-2">İç Lot No</th>
+                                            <th className="py-1.5 px-2">Tedarikçi</th>
+                                            <th className="py-1.5 px-2">Fatura / İrsaliye No</th>
+                                            <th className="py-1.5 px-2">Kabul Tarihi</th>
+                                            <th className="py-1.5 px-2 text-right">Kabul Miktarı</th>
+                                            <th className="py-1.5 px-2 text-right">Kalan Miktar</th>
+                                            <th className="py-1.5 px-2">Birim</th>
+                                            <th className="py-1.5 px-2">Künye Bilgisi</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                          {activeLotsForRm.map(lot => {
+                                            const receipt = (rawMaterialReceipts || []).find(r => r.id === lot.rawMaterialReceiptId);
+                                            const supplierName = receipt ? (supplierMap[receipt.supplierId] || '—') : '—';
+                                            const docNo = receipt ? (receipt.invoiceNumber || receipt.dispatchNoteNumber || '—') : '—';
+                                            const rDate = receipt?.receiptDate ? formatDate(receipt.receiptDate) : '—';
+
+                                            let kunyeText = 'Künye Yok';
+                                            if (lot.kunyeStatus === 'provided') {
+                                              kunyeText = lot.kunyeNumber || 'Var (Gerçek)';
+                                            } else if (lot.kunyeStatus === 'internal_placeholder') {
+                                              kunyeText = lot.kunyeNumber || 'Dahili Künye';
+                                            }
+
+                                            return (
+                                              <tr key={lot.id} className="hover:bg-slate-50">
+                                                <td className="py-1.5 px-2 font-mono font-bold text-indigo-700">{lot.internalLotNo}</td>
+                                                <td className="py-1.5 px-2 font-semibold text-slate-800">{supplierName}</td>
+                                                <td className="py-1.5 px-2 font-mono text-slate-600">{docNo}</td>
+                                                <td className="py-1.5 px-2 text-slate-500">{rDate}</td>
+                                                <td className="py-1.5 px-2 text-right font-medium text-slate-600">{formatWeight(lot.quantityReceived, rm.unit)}</td>
+                                                <td className="py-1.5 px-2 text-right font-bold text-emerald-600">{formatWeight(lot.quantityRemaining, rm.unit)}</td>
+                                                <td className="py-1.5 px-2 text-slate-400 font-mono">{rm.unit}</td>
+                                                <td className="py-1.5 px-2 text-slate-600">{kunyeText}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })
                   )}
@@ -811,6 +897,8 @@ export default function StockView({
                       <tr className="bg-slate-50/70 border-b border-slate-100 text-slate-400 font-semibold uppercase">
                         <th className="py-3 px-4">Tarih</th>
                         <th className="py-3 px-4">Hammadde</th>
+                        <th className="py-3 px-4">İç Lot No</th>
+                        <th className="py-3 px-4 text-right">Güncel Lot Kalanı</th>
                         <th className="py-3 px-4">Kayıt Tipi</th>
                         <th className="py-3 px-4 text-right">Miktar</th>
                         <th className="py-3 px-4 text-right">Birim Fiyat</th>
@@ -821,13 +909,14 @@ export default function StockView({
                     <tbody className="divide-y divide-slate-100 text-slate-600">
                       {paginatedMovements.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="text-center py-10 text-slate-400 font-medium bg-white">
+                          <td colSpan={9} className="text-center py-10 text-slate-400 font-medium bg-white">
                             Henüz stok hareketi kaydedilmemiş.
                           </td>
                         </tr>
                       ) : (
                         paginatedMovements.map((mov) => {
                           const rm = rawMaterials.find(m => m.id === mov.rawMaterialId);
+                          const matchingLot = (rawMaterialLots || []).find(l => l.inboundStockMovementId === mov.id && !l.isDeleted);
                           
                           let typeColor = 'bg-slate-50 text-slate-700 border-slate-200';
 
@@ -852,6 +941,12 @@ export default function StockView({
                             <tr key={mov.id} className="hover:bg-slate-50/50 transition-colors">
                               <td className="py-3 px-4 font-medium text-slate-500">{formatShortDate(mov.date)}</td>
                               <td className="py-3 px-4 font-semibold text-slate-900">{rm?.name || 'Silinmiş Malzeme'}</td>
+                              <td className="py-3 px-4 font-mono text-[11px] font-bold text-indigo-700">
+                                {matchingLot ? matchingLot.internalLotNo : '—'}
+                              </td>
+                              <td className="py-3 px-4 text-right font-bold text-slate-700">
+                                {matchingLot ? formatWeight(matchingLot.quantityRemaining, rm?.unit as any) : '—'}
+                              </td>
                               <td className="py-3 px-4">
                                 <span className={`inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border ${typeColor}`}>
                                   {mov.type}

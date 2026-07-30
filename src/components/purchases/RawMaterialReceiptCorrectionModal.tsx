@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X, AlertTriangle, Save, Clock, History, FileText, CheckCircle2,
-  ArrowRight, MessageSquare, Info, ChevronDown, ChevronUp, DollarSign
+  ArrowRight, MessageSquare, Info, ChevronDown, ChevronUp, DollarSign,
+  Plus, Trash2
 } from 'lucide-react';
 import {
   RawMaterialReceipt, RawMaterialLot, RawMaterial,
@@ -25,6 +26,8 @@ interface RawMaterialReceiptCorrectionModalProps {
 
 interface EditableLine {
   id: string;
+  lotId: string | null;
+  isNew?: boolean;
   rawMaterialId: string;
   internalLotNo: string;
   quantityReceived: string;
@@ -180,6 +183,8 @@ export default function RawMaterialReceiptCorrectionModal({
 
         return {
           id: lot.id,
+          lotId: lot.id,
+          isNew: false,
           rawMaterialId: lot.rawMaterialId,
           internalLotNo: lot.internalLotNo,
           quantityReceived: lot.quantityReceived.toString(),
@@ -224,6 +229,8 @@ export default function RawMaterialReceiptCorrectionModal({
     }
   }, [isOpen, receipt, lots, rawMaterials]);
 
+  const isSubmittingRef = useRef(false);
+
   const fetchCorrections = async () => {
     if (!receipt) return;
     setLoadingHistory(true);
@@ -239,14 +246,76 @@ export default function RawMaterialReceiptCorrectionModal({
 
   if (!isOpen || !receipt) return null;
 
+  // Handlers for adding and removing lines
+  const handleAddNewLine = () => {
+    const activeRawMaterials = rawMaterials.filter(r => r.isActive && !r.isDeleted);
+    const defaultRm = activeRawMaterials[0] || rawMaterials[0];
+    if (!defaultRm) return;
+
+    const isFruitOrVeg = defaultRm.category === 'Meyve' || defaultRm.category === 'Sebze';
+    const tempId = 'new_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+    setLines(prev => [
+      ...prev,
+      {
+        id: tempId,
+        lotId: null,
+        isNew: true,
+        rawMaterialId: defaultRm.id,
+        internalLotNo: '(Yeni Satır)',
+        quantityReceived: '',
+        quantityReceivedInitial: 0,
+        quantityRemaining: 0,
+        unit: defaultRm.unit || 'kg',
+        unitPrice: defaultRm.purchasePrice ? defaultRm.purchasePrice.toString() : '0',
+        unitPriceInitial: defaultRm.purchasePrice || 0,
+        kunyeStatus: isFruitOrVeg ? 'provided' : 'not_applicable',
+        kunyeNumber: null,
+        note: '',
+        isFruitOrVeg,
+        hasProductionUsageHistory: false
+      }
+    ]);
+  };
+
+  const handleRemoveNewLine = (lineId: string) => {
+    setLines(prev => prev.filter(line => line.id !== lineId));
+    setLineErrors(prev => {
+      const copy = { ...prev };
+      delete copy[lineId];
+      return copy;
+    });
+  };
+
+  const handleNewMaterialChange = (lineId: string, newRmId: string) => {
+    const rm = rawMaterials.find(r => r.id === newRmId);
+    if (!rm) return;
+    const isFruitOrVeg = rm.category === 'Meyve' || rm.category === 'Sebze';
+
+    setLines(prev => prev.map(line => {
+      if (line.id === lineId) {
+        return {
+          ...line,
+          rawMaterialId: rm.id,
+          unit: rm.unit || 'kg',
+          unitPrice: rm.purchasePrice ? rm.purchasePrice.toString() : line.unitPrice,
+          isFruitOrVeg,
+          kunyeStatus: isFruitOrVeg ? (line.kunyeStatus === 'not_applicable' ? 'provided' : line.kunyeStatus) : 'not_applicable',
+          kunyeNumber: isFruitOrVeg ? line.kunyeNumber : null
+        };
+      }
+      return line;
+    }));
+  };
+
   // Handler for line editing
   const handleLineFieldChange = <K extends keyof EditableLine>(
-    lotId: string,
+    lineId: string,
     field: K,
     value: EditableLine[K]
   ) => {
     setLines(prev => prev.map(line => {
-      if (line.id === lotId) {
+      if (line.id === lineId) {
         const updated = { ...line, [field]: value };
 
         // If status changed to 'not_applicable', clear kunyeNumber
@@ -267,8 +336,8 @@ export default function RawMaterialReceiptCorrectionModal({
     setFormError(null);
     setLineErrors({});
 
-    // Guard Checks
-    if (isSubmitting) return;
+    // Guard Checks against double submit
+    if (isSubmitting || isSubmittingRef.current) return;
 
     if (loadingTraceability || !traceabilityVerified) {
       if (traceabilityError) {
@@ -289,7 +358,7 @@ export default function RawMaterialReceiptCorrectionModal({
       return;
     }
 
-    // 2. Base Validations
+    // Base Validations
     if (!reason.trim()) {
       setFormError("Düzeltme gerekçesi girmek zorunludur. Lütfen geçerli bir neden girin.");
       return;
@@ -364,24 +433,24 @@ export default function RawMaterialReceiptCorrectionModal({
       }
     }
 
-    // Verify lines integrity on submit
+    // Verify existing active lots present in payload
     const submitActiveLots = lots.filter(lot => lot.rawMaterialReceiptId === receipt.id && lot.isDeleted !== true);
-    const submitLotIds = new Set(submitActiveLots.map(l => l.id));
-
-    // Check if the lines to be submitted match the active lots exactly and contain no duplicates
     const activeLotIdsInLines = new Set<string>();
     let submitHasDuplicate = false;
+
     for (const line of lines) {
-      if (activeLotIdsInLines.has(line.id)) {
-        submitHasDuplicate = true;
+      if (line.lotId) {
+        if (activeLotIdsInLines.has(line.lotId)) {
+          submitHasDuplicate = true;
+        }
+        activeLotIdsInLines.add(line.lotId);
       }
-      activeLotIdsInLines.add(line.id);
     }
 
-    const setsMatch = submitLotIds.size === activeLotIdsInLines.size && [...submitLotIds].every(id => activeLotIdsInLines.has(id));
+    const setsMatch = submitActiveLots.length === activeLotIdsInLines.size && submitActiveLots.every(l => activeLotIdsInLines.has(l.id));
 
     if (submitHasDuplicate || !setsMatch || submitActiveLots.length === 0) {
-      setFormError("Kritik Hata: Gönderilecek veriler arasında bütünlük hatası bulunuyor (mükerrer, eksik veya fazla lot). İşlem iptal edildi.");
+      setFormError("Kritik Hata: Fişteki mevcut aktif lotlar gönderilen satırlarda eksiksiz bulunmalıdır. Mevcut satırlar silinemez.");
       return;
     }
 
@@ -389,7 +458,11 @@ export default function RawMaterialReceiptCorrectionModal({
     let hasChanges = false;
     let quantityChanged = false;
 
-    // Check header changes
+    if (lines.some(l => l.isNew || !l.lotId)) {
+      hasChanges = true;
+      quantityChanged = true;
+    }
+
     if (
       invoiceNumber.trim() !== (receipt.invoiceNumber || '') ||
       dispatchNoteNumber.trim() !== (receipt.dispatchNoteNumber || '') ||
@@ -398,9 +471,9 @@ export default function RawMaterialReceiptCorrectionModal({
       hasChanges = true;
     }
 
-    // Check line changes
     for (const line of lines) {
-      const originalLot = lots.find(l => l.id === line.id);
+      if (!line.lotId) continue;
+      const originalLot = lots.find(l => l.id === line.lotId);
       const originalNote = originalLot?.note || '';
       const originalKunyeStatus = originalLot?.kunyeStatus || (line.isFruitOrVeg ? 'provided' : 'not_applicable');
       const originalKunyeNumber = originalLot?.kunyeNumber || null;
@@ -441,11 +514,13 @@ export default function RawMaterialReceiptCorrectionModal({
         updatedAt: receipt.updatedAt,
         correctionId: null,
         updatedLots: [],
+        addedLots: [],
         recalculatedRawMaterials: []
       });
       return;
     }
 
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
     try {
       const payload: UpdateRawMaterialReceiptInput = {
@@ -456,17 +531,29 @@ export default function RawMaterialReceiptCorrectionModal({
         dispatchNoteNumber: dispatchNoteNumber.trim() || null,
         note: generalNote.trim() || null,
         lines: lines.map(line => {
-          const hasUsage = line.hasProductionUsageHistory === true || (traceabilityLots[line.id]?.productionUsages?.length ?? 0) > 0;
-          const isQuantityLocked = Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+          if (line.lotId) {
+            const hasUsage = line.hasProductionUsageHistory === true || (traceabilityLots[line.id]?.productionUsages?.length ?? 0) > 0;
+            const isQuantityLocked = Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
 
-          return {
-            lotId: line.id,
-            unitPrice: Number(line.unitPrice.trim()),
-            quantityReceived: isQuantityLocked ? line.quantityReceivedInitial : Number(line.quantityReceived.trim()),
-            kunyeStatus: line.kunyeStatus,
-            kunyeNumber: line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber?.trim() || null),
-            note: line.note.trim() || null
-          };
+            return {
+              lotId: line.lotId,
+              unitPrice: Number(line.unitPrice.trim()),
+              quantityReceived: isQuantityLocked ? line.quantityReceivedInitial : Number(line.quantityReceived.trim()),
+              kunyeStatus: line.kunyeStatus,
+              kunyeNumber: line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber?.trim() || null),
+              note: line.note.trim() || null
+            };
+          } else {
+            return {
+              lotId: null,
+              rawMaterialId: line.rawMaterialId,
+              unitPrice: Number(line.unitPrice.trim()),
+              quantityReceived: Number(line.quantityReceived.trim()),
+              kunyeStatus: line.kunyeStatus,
+              kunyeNumber: line.kunyeStatus === 'not_applicable' ? null : (line.kunyeNumber?.trim() || null),
+              note: line.note.trim() || null
+            };
+          }
         })
       };
 
@@ -487,6 +574,7 @@ export default function RawMaterialReceiptCorrectionModal({
       }
     } finally {
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -812,31 +900,82 @@ export default function RawMaterialReceiptCorrectionModal({
 
           {/* Lots Lines list */}
           <div className="space-y-4">
-            <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-              <DollarSign size={14} className="text-emerald-600" />
-              <span>Partiler (Lotlar) ve Birim Fiyat / Künye Düzeltmeleri</span>
-            </h4>
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <DollarSign size={14} className="text-emerald-600" />
+                <span>Partiler (Lotlar) ve Birim Fiyat / Künye Düzeltmeleri</span>
+              </h4>
+              <button
+                type="button"
+                onClick={handleAddNewLine}
+                disabled={isSubmitting}
+                className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition-colors flex items-center gap-1 shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                <Plus size={14} />
+                <span>Yeni Hammadde Ekle</span>
+              </button>
+            </div>
 
             <div className="space-y-4">
               {lines.map((line, index) => {
+                const isNewLine = line.isNew || !line.lotId;
                 const rmInfo = rmMap[line.rawMaterialId] || { name: 'Bilinmeyen Hammadde', category: 'Diğer', unit: 'kg' };
-                const hasUsage = line.hasProductionUsageHistory === true || (traceabilityLots[line.id]?.productionUsages?.length ?? 0) > 0;
-                const isPriceLocked = loadingTraceability || !traceabilityVerified || !linesIntegrityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
-                const isQuantityLocked = loadingTraceability || !traceabilityVerified || !linesIntegrityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage;
+                const hasUsage = !isNewLine && (line.hasProductionUsageHistory === true || (traceabilityLots[line.id]?.productionUsages?.length ?? 0) > 0);
+                const isPriceLocked = !isNewLine && (loadingTraceability || !traceabilityVerified || !linesIntegrityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage);
+                const isQuantityLocked = !isNewLine && (loadingTraceability || !traceabilityVerified || !linesIntegrityVerified || Math.abs(line.quantityRemaining - line.quantityReceivedInitial) > 0.0001 || hasUsage);
 
                 return (
-                  <div key={line.id} className="border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-xs hover:border-slate-300 transition-colors">
+                  <div key={line.id} className={`border rounded-2xl overflow-hidden shadow-xs transition-colors ${isNewLine ? 'border-emerald-300 bg-emerald-50/20' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
                     {/* Line Header */}
-                    <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-extrabold text-slate-800">{index + 1}. {rmInfo.name}</span>
-                        <span className="text-[10px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded font-bold font-mono">
-                          {line.internalLotNo}
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-semibold">Kategori: {rmInfo.category}</span>
+                    <div className={`${isNewLine ? 'bg-emerald-50/80 border-b border-emerald-100' : 'bg-slate-50 border-b border-slate-100'} px-4 py-2.5 flex flex-wrap items-center justify-between gap-2`}>
+                      <div className="flex items-center gap-2 flex-1 min-w-[240px]">
+                        <span className="text-xs font-extrabold text-slate-800">{index + 1}.</span>
+                        {isNewLine ? (
+                          <div className="flex items-center gap-2 flex-1">
+                            <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 font-mono">
+                              Yeni Satır
+                            </span>
+                            <select
+                              value={line.rawMaterialId}
+                              onChange={(e) => handleNewMaterialChange(line.id, e.target.value)}
+                              className="bg-white px-2.5 py-1 rounded-xl border border-emerald-300 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-600 max-w-xs"
+                            >
+                              {rawMaterials.filter(r => r.isActive && !r.isDeleted).map(rm => (
+                                <option key={rm.id} value={rm.id}>
+                                  {rm.name} ({rm.category}) - {rm.unit}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-xs font-extrabold text-slate-800">{rmInfo.name}</span>
+                            <span className="text-[10px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded font-bold font-mono">
+                              {line.internalLotNo}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-semibold">Kategori: {rmInfo.category}</span>
+                          </>
+                        )}
                       </div>
-                      <div className="text-[11px] font-semibold text-slate-500">
-                        Orijinal Miktar: <span className="font-bold text-slate-800">{line.quantityReceivedInitial} {line.unit}</span> (Kalan: <span className="font-extrabold text-slate-800">{line.quantityRemaining} {line.unit}</span>)
+
+                      <div className="flex items-center gap-3">
+                        {!isNewLine && (
+                          <div className="text-[11px] font-semibold text-slate-500">
+                            Orijinal Miktar: <span className="font-bold text-slate-800">{line.quantityReceivedInitial} {line.unit}</span> (Kalan: <span className="font-extrabold text-slate-800">{line.quantityRemaining} {line.unit}</span>)
+                          </div>
+                        )}
+
+                        {isNewLine && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveNewLine(line.id)}
+                            title="Yeni satırı kaldır"
+                            className="p-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-xs font-bold"
+                          >
+                            <Trash2 size={14} />
+                            <span>Kaldır</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
