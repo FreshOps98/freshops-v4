@@ -140,9 +140,7 @@ BEGIN
      * Durum Kuralları:
      */
     IF v_shipped_quantity > 0 THEN
-      IF (v_ordered_quantity > 0 AND v_shipped_quantity >= v_ordered_quantity)
-         OR (COALESCE(v_order.total_amount, 0) > 0 AND v_realized_amount >= COALESCE(v_order.total_amount, 0))
-      THEN
+      IF (v_ordered_quantity > 0 AND v_shipped_quantity >= v_ordered_quantity) THEN
         v_new_status := 'Sevk Edildi';
       ELSIF v_all_items_fully_produced AND v_remaining_fg_quantity = 0 THEN
         -- Fire / Stok Düzeltmesi ile mamul stogu sıfırlanmış ama operasyonu bitmiş sipariş
@@ -247,6 +245,8 @@ DECLARE
   v_first_set boolean := false;
 
   v_existing_movement_count integer := 0;
+  v_existing_distinct_stock_count integer := 0;
+  v_stock_set_mismatch boolean := false;
 
   v_created_movement_ids text[] := ARRAY[]::text[];
   v_affected_order_ids text[] := ARRAY[]::text[];
@@ -291,9 +291,35 @@ BEGIN
 
   v_expected_note := COALESCE(p_note, 'Sayım Düzeltmesi: ' || v_reason_clean);
 
-  -- 5. Full Idempotency Check
-  SELECT COUNT(*)
-  INTO v_existing_movement_count
+  -- 5. Extract & validate stock IDs, check duplicate stock_id in request
+  FOR v_adj IN SELECT * FROM jsonb_array_elements(p_adjustments)
+  LOOP
+    v_stock_id := COALESCE(v_adj->>'stock_id', v_adj->>'stockId');
+    v_exp_prev := (COALESCE(v_adj->>'expected_previous_quantity', v_adj->>'expectedPreviousQuantity'))::numeric;
+    v_new_rem := (COALESCE(v_adj->>'new_remaining', v_adj->>'newRemaining'))::numeric;
+
+    IF v_stock_id IS NULL OR BTRIM(v_stock_id) = '' THEN
+      RAISE EXCEPTION 'p_adjustments içinde geçerli stock_id bulunmalıdır.';
+    END IF;
+
+    IF v_exp_prev IS NULL THEN
+      RAISE EXCEPTION 'Stok ( % ) için expected_previous_quantity belirtilmelidir.', v_stock_id;
+    END IF;
+
+    IF v_new_rem IS NULL THEN
+      RAISE EXCEPTION 'Stok ( % ) için new_remaining belirtilmelidir.', v_stock_id;
+    END IF;
+
+    IF v_stock_id = ANY(v_stock_ids) THEN
+      RAISE EXCEPTION 'Aynı stock_id ( % ) istekte birden fazla kez bulunamaz.', v_stock_id;
+    END IF;
+
+    v_stock_ids := array_append(v_stock_ids, v_stock_id);
+  END LOOP;
+
+  -- 6. Full Idempotency Check
+  SELECT COUNT(*), COUNT(DISTINCT finished_goods_stock_id)
+  INTO v_existing_movement_count, v_existing_distinct_stock_count
   FROM public.finished_goods_movements
   WHERE organization_id = v_org_id
     AND idempotency_key = v_idem_key
@@ -302,6 +328,23 @@ BEGIN
   IF v_existing_movement_count > 0 THEN
     IF v_existing_movement_count <> jsonb_array_length(p_adjustments) THEN
       RAISE EXCEPTION 'İdempotence hatası: Aynı idempotency anahtarı ( % ) farklı sayıda stok düzeltmesiyle kullanılmış.', v_idem_key;
+    END IF;
+
+    IF v_existing_distinct_stock_count <> array_length(v_stock_ids, 1) THEN
+      RAISE EXCEPTION 'İdempotence hatası: Aynı idempotency anahtarı ( % ) farklı sayıda stokla kullanılmış.', v_idem_key;
+    END IF;
+
+    SELECT EXISTS (
+      SELECT 1 FROM public.finished_goods_movements
+      WHERE organization_id = v_org_id
+        AND idempotency_key = v_idem_key
+        AND COALESCE(is_deleted, false) = false
+      HAVING ARRAY_AGG(DISTINCT finished_goods_stock_id ORDER BY finished_goods_stock_id) <>
+             (SELECT ARRAY_AGG(DISTINCT s ORDER BY s) FROM UNNEST(v_stock_ids) s)
+    ) INTO v_stock_set_mismatch;
+
+    IF v_stock_set_mismatch THEN
+      RAISE EXCEPTION 'İdempotence hatası: Aynı idempotency anahtarı ( % ) farklı stok kümesiyle kullanılmış.', v_idem_key;
     END IF;
 
     FOR v_adj IN SELECT * FROM jsonb_array_elements(p_adjustments)
@@ -345,21 +388,6 @@ BEGIN
       'movementIds', COALESCE(v_created_movement_ids, ARRAY[]::text[])
     );
   END IF;
-
-  -- 6. Extract stock IDs and check duplicate stock_id in request
-  FOR v_adj IN SELECT * FROM jsonb_array_elements(p_adjustments)
-  LOOP
-    v_stock_id := COALESCE(v_adj->>'stock_id', v_adj->>'stockId');
-    IF v_stock_id IS NULL OR BTRIM(v_stock_id) = '' THEN
-      RAISE EXCEPTION 'p_adjustments içinde geçerli stock_id bulunmalıdır.';
-    END IF;
-
-    IF v_stock_id = ANY(v_stock_ids) THEN
-      RAISE EXCEPTION 'Aynı stock_id ( % ) istekte birden fazla kez bulunamaz.', v_stock_id;
-    END IF;
-
-    v_stock_ids := array_append(v_stock_ids, v_stock_id);
-  END LOOP;
 
   -- 7. Lock target stock rows in ID order FOR UPDATE
   FOR v_stock IN

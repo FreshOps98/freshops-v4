@@ -2987,64 +2987,8 @@ export default function App() {
   };
 
   const handleAdjustFinishedGoodsStock = async (
-    requestOrAdjustments: AdjustFinishedGoodsStockRequest | string | { id: string; newRemaining: number }[],
-    secondArg?: any,
-    thirdArg?: string,
-    fourthArg?: string,
-    fifthArg?: string,
-    overallPreviousRemaining?: number,
-    overallNewRemaining?: number
+    request: AdjustFinishedGoodsStockRequest
   ): Promise<boolean> => {
-    let request: AdjustFinishedGoodsStockRequest;
-
-    if (
-      typeof requestOrAdjustments === 'object' &&
-      requestOrAdjustments !== null &&
-      'adjustments' in requestOrAdjustments
-    ) {
-      request = requestOrAdjustments as AdjustFinishedGoodsStockRequest;
-    } else {
-      let adjustmentsList: FinishedGoodsStockAdjustmentItem[] = [];
-      let reason = '';
-      let date = getTodayISO();
-      let note = '';
-
-      if (typeof requestOrAdjustments === 'string') {
-        const id = requestOrAdjustments;
-        const newRemaining = secondArg as number;
-        reason = thirdArg || '';
-        date = fourthArg || date;
-        note = fifthArg || '';
-        const stock = finishedGoodsStocks.find(s => s.id === id);
-        adjustmentsList = [{
-          stockId: id,
-          expectedPreviousQuantity: stock ? stock.quantityRemaining : 0,
-          newRemaining
-        }];
-      } else {
-        const adjs = requestOrAdjustments as { id: string; newRemaining: number }[];
-        reason = secondArg as string;
-        date = thirdArg || date;
-        note = fourthArg || '';
-        adjustmentsList = adjs.map(a => {
-          const s = finishedGoodsStocks.find(st => st.id === a.id);
-          return {
-            stockId: a.id,
-            expectedPreviousQuantity: s ? s.quantityRemaining : 0,
-            newRemaining: a.newRemaining
-          };
-        });
-      }
-
-      request = {
-        adjustments: adjustmentsList,
-        reason,
-        movementDate: date,
-        note,
-        idempotencyKey: fifthArg || crypto.randomUUID()
-      };
-    }
-
     if (USE_SUPABASE) {
       let result;
       try {
