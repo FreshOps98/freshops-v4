@@ -47,7 +47,24 @@ BEGIN
   END IF;
 
   /*
-   * 1. Kullanıcı tarafından yönetilen özel durumları koru.
+   * 1. Realized amount yalnızca aktif "Sevkiyat çıkışı" hareketlerinden hesaplanır.
+   * Sayım Düzeltmesi hareketi realized_amount'a eklenmez. Özel durumlarda dahi hesaplanır.
+   */
+  SELECT COALESCE(SUM(fgm.quantity * COALESCE(oi.unit_sale_price, 0)), 0)
+  INTO v_realized_amount
+  FROM public.finished_goods_movements fgm
+  JOIN public.order_items oi
+    ON oi.id = fgm.order_item_id
+   AND oi.organization_id = v_org_id
+   AND COALESCE(oi.is_deleted, false) = false
+  WHERE fgm.order_id = v_order.id
+    AND fgm.organization_id = v_org_id
+    AND COALESCE(fgm.is_deleted, false) = false
+    AND COALESCE(fgm.is_shipment, false) = true
+    AND fgm.movement_type = 'Sevkiyat çıkışı';
+
+  /*
+   * 2. Kullanıcı tarafından yönetilen özel durumları koru.
    */
   IF v_order.status IN (
       'Taslak',
@@ -68,23 +85,6 @@ BEGIN
     v_new_status := v_order.computed_status;
 
   ELSE
-    /*
-     * 2. Realized amount yalnızca aktif "Sevkiyat çıkışı" hareketlerinden hesaplanır.
-     * Sayım Düzeltmesi hareketi realized_amount'a eklenmez.
-     */
-    SELECT COALESCE(SUM(fgm.quantity * COALESCE(oi.unit_sale_price, 0)), 0)
-    INTO v_realized_amount
-    FROM public.finished_goods_movements fgm
-    JOIN public.order_items oi
-      ON oi.id = fgm.order_item_id
-     AND oi.organization_id = v_org_id
-     AND COALESCE(oi.is_deleted, false) = false
-    WHERE fgm.order_id = v_order.id
-      AND fgm.organization_id = v_org_id
-      AND COALESCE(fgm.is_deleted, false) = false
-      AND COALESCE(fgm.is_shipment, false) = true
-      AND fgm.movement_type = 'Sevkiyat çıkışı';
-
     /*
      * 3. Aktif sevkiyat miktarı
      */
@@ -238,8 +238,7 @@ DECLARE
 
   v_stock_ids text[] := ARRAY[]::text[];
   v_stock record;
-  v_stocks record[];
-  
+
   -- Group consistency variables
   v_first_order_id text;
   v_first_order_item_id text;
@@ -248,7 +247,6 @@ DECLARE
   v_first_set boolean := false;
 
   v_existing_movement_count integer := 0;
-  v_matching_movement_count integer := 0;
 
   v_created_movement_ids text[] := ARRAY[]::text[];
   v_affected_order_ids text[] := ARRAY[]::text[];
@@ -262,6 +260,8 @@ DECLARE
   v_new_stock_status text;
   v_fgm_id text;
   v_reason_clean text;
+  v_expected_note text;
+  v_is_payload_match boolean := false;
 BEGIN
   -- 1. Tenant Verification
   v_org_id := public.current_organization_id();
@@ -269,63 +269,81 @@ BEGIN
     RAISE EXCEPTION 'No active organization found for current user.';
   END IF;
 
-  -- 2. Validate Reason
+  -- 2. Validate Idempotency Key (mandatory)
+  v_idem_key := NULLIF(BTRIM(p_idempotency_key), '');
+  IF v_idem_key IS NULL THEN
+    RAISE EXCEPTION 'İdempotent anahtarı (p_idempotency_key) boş olamaz.';
+  END IF;
+
+  -- Transaction-level advisory lock to serialize concurrent requests with same org + idempotency key
+  PERFORM pg_advisory_xact_lock(hashtextextended(v_org_id::text || ':' || v_idem_key, 0));
+
+  -- 3. Validate Reason
   v_reason_clean := BTRIM(p_reason);
   IF v_reason_clean IS NULL OR v_reason_clean = '' THEN
     RAISE EXCEPTION 'Düzeltme nedeni (p_reason) boş olamaz.';
   END IF;
 
-  -- 3. Validate Adjustments Array
+  -- 4. Validate Adjustments Array
   IF p_adjustments IS NULL OR jsonb_typeof(p_adjustments) <> 'array' OR jsonb_array_length(p_adjustments) = 0 THEN
     RAISE EXCEPTION 'p_adjustments boş olamaz ve dizi tipinde olmalıdır.';
   END IF;
 
-  -- 4. Clean Idempotency Key
-  v_idem_key := NULLIF(BTRIM(p_idempotency_key), '');
+  v_expected_note := COALESCE(p_note, 'Sayım Düzeltmesi: ' || v_reason_clean);
 
-  -- 5. Idempotency Check if key provided
-  IF v_idem_key IS NOT NULL THEN
-    SELECT COUNT(*), COUNT(DISTINCT finished_goods_stock_id)
-    INTO v_existing_movement_count, v_matching_movement_count
+  -- 5. Full Idempotency Check
+  SELECT COUNT(*)
+  INTO v_existing_movement_count
+  FROM public.finished_goods_movements
+  WHERE organization_id = v_org_id
+    AND idempotency_key = v_idem_key
+    AND COALESCE(is_deleted, false) = false;
+
+  IF v_existing_movement_count > 0 THEN
+    IF v_existing_movement_count <> jsonb_array_length(p_adjustments) THEN
+      RAISE EXCEPTION 'İdempotence hatası: Aynı idempotency anahtarı ( % ) farklı sayıda stok düzeltmesiyle kullanılmış.', v_idem_key;
+    END IF;
+
+    FOR v_adj IN SELECT * FROM jsonb_array_elements(p_adjustments)
+    LOOP
+      v_stock_id := COALESCE(v_adj->>'stock_id', v_adj->>'stockId');
+      v_exp_prev := (COALESCE(v_adj->>'expected_previous_quantity', v_adj->>'expectedPreviousQuantity'))::numeric;
+      v_new_rem := (COALESCE(v_adj->>'new_remaining', v_adj->>'newRemaining'))::numeric;
+
+      SELECT EXISTS (
+        SELECT 1 FROM public.finished_goods_movements
+        WHERE organization_id = v_org_id
+          AND idempotency_key = v_idem_key
+          AND finished_goods_stock_id = v_stock_id
+          AND previous_quantity = v_exp_prev
+          AND new_quantity = v_new_rem
+          AND COALESCE(reason, '') = v_reason_clean
+          AND movement_date = p_movement_date
+          AND COALESCE(note, '') = v_expected_note
+          AND movement_type = 'Sayım Düzeltmesi'
+          AND COALESCE(is_deleted, false) = false
+      ) INTO v_is_payload_match;
+
+      IF NOT v_is_payload_match THEN
+        RAISE EXCEPTION 'İdempotence hatası: Aynı idempotency anahtarı ( % ) farklı bir istek parametresiyle kullanılmış.', v_idem_key;
+      END IF;
+    END LOOP;
+
+    SELECT ARRAY_AGG(DISTINCT id), ARRAY_AGG(DISTINCT order_id)
+    INTO v_created_movement_ids, v_affected_order_ids
     FROM public.finished_goods_movements
     WHERE organization_id = v_org_id
-      AND idempotency_key = v_idem_key;
+      AND idempotency_key = v_idem_key
+      AND COALESCE(is_deleted, false) = false;
 
-    IF v_existing_movement_count > 0 THEN
-      -- Check if existing movements match current request payload
-      -- For each adjustment in p_adjustments, check if a matching movement exists with new_quantity = new_remaining
-      FOR v_adj IN SELECT * FROM jsonb_array_elements(p_adjustments)
-      LOOP
-        v_stock_id := COALESCE(v_adj->>'stock_id', v_adj->>'stockId');
-        v_new_rem := COALESCE(v_adj->>'new_remaining', v_adj->>'newRemaining')::numeric;
-
-        IF NOT EXISTS (
-          SELECT 1 FROM public.finished_goods_movements
-          WHERE organization_id = v_org_id
-            AND idempotency_key = v_idem_key
-            AND finished_goods_stock_id = v_stock_id
-            AND new_quantity = v_new_rem
-        ) THEN
-          RAISE EXCEPTION 'İdempotent anahtarı ( % ) farklı bir istek parametresiyle kullanılmış.', v_idem_key;
-        END IF;
-      END LOOP;
-
-      -- If all payload items matched existing movements:
-      SELECT ARRAY_AGG(DISTINCT id), ARRAY_AGG(DISTINCT order_id)
-      INTO v_created_movement_ids, v_affected_order_ids
-      FROM public.finished_goods_movements
-      WHERE organization_id = v_org_id
-        AND idempotency_key = v_idem_key;
-
-      RETURN jsonb_build_object(
-        'success', true,
-        'alreadyApplied', true,
-        'noChanges', false,
-        'adjustmentCount', v_existing_movement_count,
-        'orderIds', COALESCE(v_affected_order_ids, ARRAY[]::text[]),
-        'movementIds', COALESCE(v_created_movement_ids, ARRAY[]::text[])
-      );
-    END IF;
+    RETURN jsonb_build_object(
+      'success', true,
+      'alreadyApplied', true,
+      'noChanges', false,
+      'adjustmentCount', v_existing_movement_count,
+      'orderIds', COALESCE(v_affected_order_ids, ARRAY[]::text[]),
+      'movementIds', COALESCE(v_created_movement_ids, ARRAY[]::text[])
+    );
   END IF;
 
   -- 6. Extract stock IDs and check duplicate stock_id in request
@@ -506,7 +524,7 @@ BEGIN
         v_diff,
         v_stock.lot_no,
         v_reason_clean,
-        COALESCE(p_note, 'Sayım Düzeltmesi: ' || v_reason_clean),
+        v_expected_note,
         FALSE,
         FALSE,
         COALESCE(v_stock.is_demo, FALSE),
@@ -544,3 +562,4 @@ $function$;
 
 REVOKE ALL ON FUNCTION public.adjust_finished_goods_stock_atomic(jsonb, text, date, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.adjust_finished_goods_stock_atomic(jsonb, text, date, text, text) TO authenticated, service_role;
+

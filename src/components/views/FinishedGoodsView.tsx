@@ -115,6 +115,7 @@ export default function FinishedGoodsView({
   const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState(false);
   const [selectedDetailGroup, setSelectedDetailGroup] = useState<DetailGroup | null>(null);
   const [isCorrectionSaving, setIsCorrectionSaving] = useState(false);
+  const isCorrectionSubmittingRef = useRef(false);
   const correctionIdempotencyKeyRef = useRef<string | null>(null);
 
   // Traceability Modal states
@@ -572,7 +573,7 @@ export default function FinishedGoodsView({
   // Dedicated Stock Correction / Adjustment submit
   const handleCorrectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedDetailGroup || isCorrectionSaving) return;
+    if (!selectedDetailGroup || isCorrectionSaving || isCorrectionSubmittingRef.current) return;
 
     if (correctRemaining === undefined || correctRemaining === null || correctRemaining.trim() === '') {
       alert('Bu alan boş bırakılamaz.');
@@ -655,6 +656,7 @@ export default function FinishedGoodsView({
     }
     const idempotencyKey = correctionIdempotencyKeyRef.current;
 
+    isCorrectionSubmittingRef.current = true;
     setIsCorrectionSaving(true);
 
     try {
@@ -690,6 +692,7 @@ export default function FinishedGoodsView({
     } catch (err) {
       console.error("Stok düzeltme işlemi sırasında hata oluştu:", err);
     } finally {
+      isCorrectionSubmittingRef.current = false;
       setIsCorrectionSaving(false);
     }
   };
@@ -1356,7 +1359,12 @@ export default function FinishedGoodsView({
                 <Sliders size={16} className="text-amber-500" />
                 <span>Nihai Ürün Stok Düzelt</span>
               </div>
-              <button onClick={() => { setIsCorrectionModalOpen(false); setSelectedDetailGroup(null); }} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+              <button
+                type="button"
+                disabled={isCorrectionSaving}
+                onClick={() => { if (!isCorrectionSaving) { setIsCorrectionModalOpen(false); setSelectedDetailGroup(null); } }}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 <X size={18} />
               </button>
             </div>
@@ -1456,8 +1464,9 @@ export default function FinishedGoodsView({
               <div className="flex justify-end gap-2.5 border-t border-slate-50 pt-4 mt-4">
                 <button
                   type="button"
-                  onClick={() => { setIsCorrectionModalOpen(false); setSelectedDetailGroup(null); }}
-                  className="px-4 py-2 border border-slate-200 font-semibold rounded-lg text-slate-500 hover:bg-slate-50 cursor-pointer"
+                  disabled={isCorrectionSaving}
+                  onClick={() => { if (!isCorrectionSaving) { setIsCorrectionModalOpen(false); setSelectedDetailGroup(null); } }}
+                  className="px-4 py-2 border border-slate-200 font-semibold rounded-lg text-slate-500 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Vazgeç
                 </button>

@@ -3040,33 +3040,42 @@ export default function App() {
         adjustments: adjustmentsList,
         reason,
         movementDate: date,
-        note
+        note,
+        idempotencyKey: fifthArg || crypto.randomUUID()
       };
     }
 
     if (USE_SUPABASE) {
+      let result;
       try {
-        const result = await supabaseDataService.adjustFinishedGoodsStockAtomic(request);
-        if (result && result.success) {
-          const [stocks, movements, ordersList] = await Promise.all([
-            supabaseDataService.getFinishedGoods(),
-            supabaseDataService.getFinishedGoodsMovements(),
-            supabaseDataService.getOrders()
-          ]);
-          setFinishedGoodsStocks(stocks.map(normalizeFinishedGoodsStock));
-          setFinishedGoodsMovements(movements);
-          setOrders(ordersList.map(normalizeOrder));
-          return true;
-        } else {
-          console.error("adjustFinishedGoodsStockAtomic error:", result);
-          alert(result?.error || 'Stok düzeltme işlemi veritabanında gerçekleştirilemedi.');
-          return false;
-        }
+        result = await supabaseDataService.adjustFinishedGoodsStockAtomic(request);
       } catch (err: any) {
         console.error("adjustFinishedGoodsStockAtomic exception:", err);
         alert('Stok düzeltme hatası: ' + (err?.message || err));
         return false;
       }
+
+      if (!result || !result.success) {
+        console.error("adjustFinishedGoodsStockAtomic error:", result);
+        alert((result as any)?.error || 'Stok düzeltme işlemi veritabanında gerçekleştirilemedi.');
+        return false;
+      }
+
+      try {
+        const [stocks, movements, ordersList] = await Promise.all([
+          supabaseDataService.getFinishedGoods(),
+          supabaseDataService.getFinishedGoodsMovements(),
+          supabaseDataService.getOrders()
+        ]);
+        setFinishedGoodsStocks(stocks.map(normalizeFinishedGoodsStock));
+        setFinishedGoodsMovements(movements);
+        setOrders(ordersList.map(normalizeOrder));
+      } catch (reloadErr) {
+        console.error("Stok düzeltme sonrası veriler yenilenirken hata:", reloadErr);
+        alert('Düzeltme kaydedildi ancak ekran verileri yenilenemedi; lütfen sayfayı yenileyin.');
+      }
+
+      return true;
     } else {
       for (const adj of request.adjustments) {
         setFinishedGoodsStocks(prev => prev.map(item => {

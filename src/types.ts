@@ -233,7 +233,7 @@ export interface AdjustFinishedGoodsStockRequest {
   reason: string;
   movementDate: string;
   note?: string;
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface AdjustFinishedGoodsStockResult {

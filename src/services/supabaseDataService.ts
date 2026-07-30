@@ -574,7 +574,8 @@ export function dbToFinishedGoodsMovement(row: any): FinishedGoodsMovement {
     previousQuantity: row.previous_quantity !== null && row.previous_quantity !== undefined ? toNumber(row.previous_quantity, 0) : undefined,
     newQuantity: row.new_quantity !== null && row.new_quantity !== undefined ? toNumber(row.new_quantity, 0) : undefined,
     difference: row.difference !== null && row.difference !== undefined ? toNumber(row.difference, 0) : undefined,
-    lotNo: row.lot_no || undefined
+    lotNo: row.lot_no || undefined,
+    idempotencyKey: row.idempotency_key || undefined
   };
 }
 
@@ -600,6 +601,7 @@ export function finishedGoodsMovementToDb(item: any) {
     new_quantity: item.newQuantity !== undefined ? toNumber(item.newQuantity, 0) : null,
     difference: item.difference !== undefined ? toNumber(item.difference, 0) : null,
     lot_no: item.lotNo || null,
+    idempotency_key: item.idempotencyKey || null,
     created_at: item.createdAt || new Date().toISOString(),
     updated_at: item.updatedAt || new Date().toISOString()
   };
@@ -1871,7 +1873,7 @@ export const supabaseDataService = {
       p_reason: request.reason,
       p_movement_date: request.movementDate,
       p_note: request.note || null,
-      p_idempotency_key: request.idempotencyKey || null
+      p_idempotency_key: request.idempotencyKey
     });
 
     if (error) {
