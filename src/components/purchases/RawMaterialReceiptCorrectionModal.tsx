@@ -581,7 +581,7 @@ export default function RawMaterialReceiptCorrectionModal({
       if (isOptimisticConcurrencyError(errMsg)) {
         setFormError("Bu fiş başka bir işlem tarafından güncellendi. Verileri yenileyip tekrar deneyin.");
       } else if (isDuplicateReceiptError(errMsg)) {
-        setFormError(`Mükerrer Fatura Hatası: ${errMsg} (İşlem iptal edildi / aborted).`);
+        setFormError("Bu tedarikçi için aynı fatura numarasıyla daha önce bir satın alma fişi oluşturulmuş. İşlem iptal edildi; yeni fiş, stok hareketi veya lot oluşturulmadı. Eksik ürünü mevcut fişi düzenleyerek ekleyebilirsiniz.");
       } else {
         setFormError(errMsg);
       }

@@ -892,13 +892,7 @@ BEGIN
                        ' | Lot No: ' || v_new_internal_lot_no ||
                        ' | Fiş ID: ' || p_receipt_id;
 
-      SELECT COALESCE(current_stock, 0)
-      INTO v_current_stock_before
-      FROM public.raw_materials
-      WHERE id = v_line_rm_id
-        AND organization_id = v_org_id;
-
-      -- Insert stock movement record
+      -- Insert stock movement record (trigger trg_apply_raw_material_stock_movement calculates total_cost, previous_stock, new_stock & updates raw_materials.current_stock)
       INSERT INTO public.stock_movements (
         id,
         organization_id,
@@ -907,9 +901,6 @@ BEGIN
         quantity,
         unit,
         unit_price,
-        total_cost,
-        previous_stock,
-        new_stock,
         movement_date,
         difference,
         source_type,
@@ -927,9 +918,6 @@ BEGIN
         v_line_quantity,
         v_rm_unit,
         v_line_price,
-        v_line_quantity * v_line_price,
-        v_current_stock_before,
-        v_current_stock_before + v_line_quantity,
         v_receipt.receipt_date,
         v_line_quantity,
         'raw_material_receipt',
@@ -940,13 +928,6 @@ BEGIN
         NOW(),
         NOW()
       );
-
-      -- Update current_stock for raw_material
-      UPDATE public.raw_materials
-      SET current_stock = current_stock + v_line_quantity,
-          updated_at = NOW()
-      WHERE id = v_line_rm_id
-        AND organization_id = v_org_id;
 
       -- Insert raw_material_lots record with quantity_received = quantity_remaining
       INSERT INTO public.raw_material_lots (
