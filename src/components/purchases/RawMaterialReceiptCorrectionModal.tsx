@@ -73,7 +73,8 @@ function isDuplicateReceiptError(errorMessage: string): boolean {
     'daha önce bir satın alma fişi oluşturulmuş',
     'mükerrer',
     'duplicate',
-    'raw_material_receipt_invoice_guard'
+    'raw_material_receipt_invoice_guard',
+    'raw_material_receipt_dispatch_guard'
   ];
   return triggers.some(trigger => lowerMessage.includes(trigger));
 }
