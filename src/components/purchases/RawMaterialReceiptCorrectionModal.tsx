@@ -67,6 +67,17 @@ function isOptimisticConcurrencyError(errorMessage: string): boolean {
   return triggers.some(trigger => lowerMessage.includes(trigger));
 }
 
+function isDuplicateReceiptError(errorMessage: string): boolean {
+  const lowerMessage = errorMessage.toLowerCase();
+  const triggers = [
+    'daha önce bir satın alma fişi oluşturulmuş',
+    'mükerrer',
+    'duplicate',
+    'raw_material_receipt_invoice_guard'
+  ];
+  return triggers.some(trigger => lowerMessage.includes(trigger));
+}
+
 export default function RawMaterialReceiptCorrectionModal({
   isOpen,
   onClose,
@@ -569,6 +580,8 @@ export default function RawMaterialReceiptCorrectionModal({
       const errMsg = getErrorMessage(err);
       if (isOptimisticConcurrencyError(errMsg)) {
         setFormError("Bu fiş başka bir işlem tarafından güncellendi. Verileri yenileyip tekrar deneyin.");
+      } else if (isDuplicateReceiptError(errMsg)) {
+        setFormError(`Mükerrer Fatura Hatası: ${errMsg} (İşlem iptal edildi / aborted).`);
       } else {
         setFormError(errMsg);
       }

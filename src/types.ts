@@ -445,10 +445,10 @@ export interface UpdateRawMaterialReceiptResult {
     quantityReceived: number;
     quantityRemaining: number;
   }[];
-  addedLots?: {
+  addedLots: {
     lotId: string;
-    internalLotNo?: string;
-    rawMaterialId?: string;
+    internalLotNo: string;
+    rawMaterialId: string;
     kunyeStatus: KunyeStatus;
     kunyeNumber: string | null;
     note: string | null;
@@ -460,6 +460,7 @@ export interface UpdateRawMaterialReceiptResult {
     rawMaterialId: string;
     purchasePrice: number;
     averageCost: number;
+    currentStock: number;
   }[];
 }
 
@@ -835,7 +836,7 @@ export interface ActiveLotBalance {
   quantityRemaining: number;
   unit: string;
   unitPrice: number;
-  kunyeStatus: string;
+  kunyeStatus: KunyeStatus;
   kunyeNumber: string | null;
   rawMaterialId: string;
   rawMaterialName: string;
