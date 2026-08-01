@@ -5042,6 +5042,11 @@ DECLARE
   v_total_amount NUMERIC := 0;
   v_existing_item public.order_items%ROWTYPE;
   v_incoming_ids TEXT[] := ARRAY[]::TEXT[];
+  v_id_count INT;
+  v_distinct_id_count INT;
+  v_removed_item_id TEXT;
+  v_ref_count INT;
+  v_updated_rows INT;
 BEGIN
   v_org_id := public.current_organization_id();
   IF v_org_id IS NULL THEN
@@ -5079,36 +5084,21 @@ BEGIN
       RAISE EXCEPTION 'Sipariş için en az bir kalem bulunmalıdır.';
     END IF;
 
-    -- Collect incoming item IDs to detect removed items and validate cross-order IDs
-    FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
-    LOOP
-      v_item_id := TRIM(COALESCE(v_item->>'id', v_item->>'item_id'));
-      IF v_item_id IS NOT NULL AND v_item_id <> '' AND NOT (v_item_id LIKE 'temp_%') THEN
-        SELECT * INTO v_existing_item
-        FROM public.order_items
-        WHERE id = v_item_id;
+    -- REQUIREMENT 2: AYNI KALEM ID'SİNİN PAYLOAD'DA TEKRARI
+    -- Check if any non-temp real item ID is repeated in p_items
+    SELECT COUNT(*), COUNT(DISTINCT TRIM(COALESCE(elem->>'id', elem->>'item_id')))
+    INTO v_id_count, v_distinct_id_count
+    FROM jsonb_array_elements(p_items) AS elem
+    WHERE TRIM(COALESCE(elem->>'id', elem->>'item_id')) IS NOT NULL
+      AND TRIM(COALESCE(elem->>'id', elem->>'item_id')) <> ''
+      AND NOT (TRIM(COALESCE(elem->>'id', elem->>'item_id')) LIKE 'temp_%');
 
-        IF v_existing_item.id IS NOT NULL AND (v_existing_item.order_id <> p_order_id OR v_existing_item.organization_id <> v_org_id) THEN
-          RAISE EXCEPTION 'Geçersiz sipariş kalemi kimliği.';
-        END IF;
+    IF v_id_count <> v_distinct_id_count THEN
+      RAISE EXCEPTION 'Aynı sipariş kalemi güncelleme verisinde birden fazla kez gönderilemez.';
+    END IF;
 
-        v_product_id := TRIM(COALESCE(v_item->>'productId', v_item->>'product_id'));
-        IF v_existing_item.id IS NOT NULL AND v_existing_item.product_id <> v_product_id THEN
-          RAISE EXCEPTION 'Mevcut bir sipariş kaleminin ürünü değiştirilemez. Kalemi kaldırıp yeni ürün olarak ekleyin.';
-        END IF;
-
-        v_incoming_ids := array_append(v_incoming_ids, v_item_id);
-      END IF;
-    END LOOP;
-
-    -- Remove existing active order_items that are omitted from p_items payload
-    DELETE FROM public.order_items
-    WHERE order_id = p_order_id
-      AND organization_id = v_org_id
-      AND COALESCE(is_deleted, FALSE) = FALSE
-      AND NOT (id = ANY(v_incoming_ids));
-
-    -- Upsert/Insert items in p_items
+    -- REQUIREMENT 1: TANINMAYAN VEYA SİLİNMİŞ KALEM ID'Sİ
+    -- Validate ALL non-temp items in p_items BEFORE any changes
     FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
     LOOP
       v_item_id := TRIM(COALESCE(v_item->>'id', v_item->>'item_id'));
@@ -5132,6 +5122,100 @@ BEGIN
       IF v_qty <= 0 THEN
         RAISE EXCEPTION 'Ürün miktarı pozitif olmalıdır.';
       END IF;
+
+      IF v_item_id IS NOT NULL AND v_item_id <> '' AND NOT (v_item_id LIKE 'temp_%') THEN
+        -- Verify existence, order ownership, organization ownership, active status, and matching product_id
+        SELECT * INTO v_existing_item
+        FROM public.order_items
+        WHERE id = v_item_id
+          AND order_id = p_order_id
+          AND organization_id = v_org_id
+          AND COALESCE(is_deleted, FALSE) = FALSE;
+
+        IF v_existing_item.id IS NULL OR v_existing_item.product_id <> v_product_id THEN
+          RAISE EXCEPTION 'Gönderilen sipariş kalemi bulunamadı, silinmiş veya bu siparişe ait değil.';
+        END IF;
+
+        v_incoming_ids := array_append(v_incoming_ids, v_item_id);
+      END IF;
+    END LOOP;
+
+    -- REQUIREMENT 3: BAĞLI SİPARİŞ KALEMİNİN FİZİKSEL SİLİNMESİ
+    -- Identify active order items for this order that are omitted from p_items payload
+    FOR v_removed_item_id IN
+      SELECT id
+      FROM public.order_items
+      WHERE order_id = p_order_id
+        AND organization_id = v_org_id
+        AND COALESCE(is_deleted, FALSE) = FALSE
+        AND NOT (id = ANY(v_incoming_ids))
+    LOOP
+      -- Check operational reference tables (including soft-deleted/historical records for traceability)
+      v_ref_count := 0;
+
+      -- 1. production_plan_items
+      SELECT COUNT(*) INTO v_ref_count
+      FROM public.production_plan_items
+      WHERE order_item_id = v_removed_item_id;
+
+      -- 2. production_runs
+      IF v_ref_count = 0 THEN
+        SELECT COUNT(*) INTO v_ref_count
+        FROM public.production_runs
+        WHERE order_item_id = v_removed_item_id;
+      END IF;
+
+      -- 3. finished_goods_stocks
+      IF v_ref_count = 0 THEN
+        SELECT COUNT(*) INTO v_ref_count
+        FROM public.finished_goods_stocks
+        WHERE order_item_id = v_removed_item_id;
+      END IF;
+
+      -- 4. finished_goods_movements
+      IF v_ref_count = 0 THEN
+        SELECT COUNT(*) INTO v_ref_count
+        FROM public.finished_goods_movements
+        WHERE order_item_id = v_removed_item_id;
+      END IF;
+
+      -- 5. stock_movements
+      IF v_ref_count = 0 THEN
+        SELECT COUNT(*) INTO v_ref_count
+        FROM public.stock_movements
+        WHERE order_item_id = v_removed_item_id;
+      END IF;
+
+      -- 6. production_run_raw_material_lot_allocations
+      IF v_ref_count = 0 THEN
+        SELECT COUNT(*) INTO v_ref_count
+        FROM public.production_run_raw_material_lot_allocations
+        WHERE order_item_id = v_removed_item_id;
+      END IF;
+
+      IF v_ref_count > 0 THEN
+        RAISE EXCEPTION 'Üretim planı, üretim, stok veya sevkiyat kaydı bulunan sipariş kalemi silinemez.';
+      END IF;
+    END LOOP;
+
+    -- Physically remove active order items that are omitted and have NO operational references
+    DELETE FROM public.order_items
+    WHERE order_id = p_order_id
+      AND organization_id = v_org_id
+      AND COALESCE(is_deleted, FALSE) = FALSE
+      AND NOT (id = ANY(v_incoming_ids));
+
+    -- Upsert/Insert items in p_items and calculate total_amount
+    FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
+    LOOP
+      v_item_id := TRIM(COALESCE(v_item->>'id', v_item->>'item_id'));
+      v_product_id := TRIM(COALESCE(v_item->>'productId', v_item->>'product_id'));
+      v_qty := COALESCE((v_item->>'quantity')::NUMERIC, 0);
+
+      SELECT sale_price INTO v_prod_price
+      FROM public.products
+      WHERE id = v_product_id
+        AND organization_id = v_org_id;
 
       IF v_item->>'unitSalePrice' IS NOT NULL AND (v_item->>'unitSalePrice') <> '' THEN
         v_price := (v_item->>'unitSalePrice')::NUMERIC;
@@ -5168,6 +5252,11 @@ BEGIN
         WHERE id = v_item_id
           AND order_id = p_order_id
           AND organization_id = v_org_id;
+
+        GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
+        IF v_updated_rows <> 1 THEN
+          RAISE EXCEPTION 'Sipariş kalemi güncellenemedi.';
+        END IF;
       ELSE
         -- Insert NEW item
         v_item_id := public.freshops_id('ori');

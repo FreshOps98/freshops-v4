@@ -1103,7 +1103,7 @@ export const supabaseDataService = {
         productId: item.productId,
         quantity: Number(item.quantity),
         unit: item.unit || "adet",
-        unitSalePrice: Number(item.unitSalePrice || (item as any).salePrice || 0),
+        unitSalePrice: Number(item.unitSalePrice ?? (item as any).salePrice ?? 0),
         safetyRateOverride: item.safetyRateOverride ?? null,
         wasteRateOverrides: item.wasteRateOverrides ?? null
       }))
@@ -1140,7 +1140,7 @@ export const supabaseDataService = {
         productId: item.productId,
         quantity: Number(item.quantity),
         unit: item.unit || "adet",
-        unitSalePrice: Number(item.unitSalePrice || (item as any).salePrice || 0),
+        unitSalePrice: Number(item.unitSalePrice ?? (item as any).salePrice ?? 0),
         safetyRateOverride: item.safetyRateOverride ?? null,
         wasteRateOverrides: item.wasteRateOverrides ?? null
       })) : null

@@ -377,7 +377,7 @@ export default function OrdersView({
     setOrderStatus(order.approvalStatus || (order.status === 'Taslak' || order.status === 'İptal' ? order.status : 'Onaylandı'));
     setNote(order.note);
 
-    const activeItems = orderItems.filter(i => i.orderId === order.id);
+    const activeItems = orderItems.filter(i => i.orderId === order.id && !i.isDeleted);
     setTempItems(activeItems.map(item => {
       const prod = products.find(p => p.id === item.productId);
       const wastes: Record<string, string> = {};
@@ -690,7 +690,7 @@ export default function OrdersView({
 
   // Calculate Order Breakdown for Detail Screen
   const getOrderDetailStats = (order: Order) => {
-    const activeItems = orderItems.filter(i => i.orderId === order.id);
+    const activeItems = orderItems.filter(i => i.orderId === order.id && !i.isDeleted);
     const resolvedCostSettings = resolveCostSettingsForOrder(costSettings, order);
     const costBreakdown = calculateOrderCost(activeItems, products, recipes, rawMaterials, resolvedCostSettings, stockMovements);
     const realizedBreakdown = calculateOrderRealizedFinancials(
