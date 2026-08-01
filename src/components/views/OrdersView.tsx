@@ -248,7 +248,7 @@ interface OrdersViewProps {
   finishedGoodsMovements: FinishedGoodsMovement[];
   productionRuns?: ProductionRun[];
   onAddOrder: (order: Omit<Order, 'id' | 'createdAt' | 'updatedAt'>, items: Omit<OrderItem, 'id' | 'orderId'>[]) => Promise<any> | void;
-  onUpdateOrder: (id: string, updates: Partial<Order>, items?: OrderItem[]) => void;
+  onUpdateOrder: (id: string, updates: Partial<Order>, items?: OrderItem[]) => Promise<any> | void;
   onDeleteOrder: (id: string) => Promise<boolean> | void;
 }
 
@@ -421,29 +421,62 @@ export default function OrdersView({
     const prod = products.find(p => p.id === selectedProductId);
     if (!prod) return;
 
-    const existingIndex = tempItems.findIndex(t => t.productId === selectedProductId);
+    const parseOverrideNumber = (val: any): number | undefined => {
+      if (val === undefined || val === null || val === '') return undefined;
+      const n = typeof val === 'number' ? val : parseFloat(String(val).trim());
+      return isNaN(n) ? undefined : n;
+    };
 
-    if (existingIndex !== -1) {
-      const existingItem = tempItems[existingIndex];
+    const isSafetyRateEqual = (a: any, b: any): boolean => {
+      const numA = parseOverrideNumber(a);
+      const numB = parseOverrideNumber(b);
+      if (numA === undefined && numB === undefined) return true;
+      if (numA === undefined || numB === undefined) return false;
+      return Math.abs(numA - numB) < 0.0001;
+    };
 
-      // Compare safety rate override
-      const existingSafetyStr = (existingItem.safetyRateOverride || '').trim();
-      const newSafetyStr = (customSafetyRate || '').trim();
+    const isWasteOverridesEqual = (a: Record<string, any> | undefined, b: Record<string, any> | undefined): boolean => {
+      const mapA: Record<string, number> = {};
+      const mapB: Record<string, number> = {};
 
-      // Compare waste rate overrides
-      const isWasteEqual = () => {
-        const existingWastes = existingItem.wasteRateOverrides || {};
-        const newWastes = customWasteOverrides || {};
-        const keysE = Object.keys(existingWastes).filter(k => existingWastes[k] !== undefined && existingWastes[k] !== '' && existingWastes[k] !== null);
-        const keysN = Object.keys(newWastes).filter(k => newWastes[k] !== undefined && newWastes[k] !== '' && newWastes[k] !== null);
-        if (keysE.length !== keysN.length) return false;
-        for (const k of keysE) {
-          if ((existingWastes[k] || '').trim() !== (newWastes[k] || '').trim()) return false;
+      if (a) {
+        Object.keys(a).forEach(k => {
+          const num = parseOverrideNumber(a[k]);
+          if (num !== undefined) mapA[k] = num;
+        });
+      }
+      if (b) {
+        Object.keys(b).forEach(k => {
+          const num = parseOverrideNumber(b[k]);
+          if (num !== undefined) mapB[k] = num;
+        });
+      }
+
+      const keysA = Object.keys(mapA);
+      const keysB = Object.keys(mapB);
+
+      if (keysA.length !== keysB.length) return false;
+
+      for (const k of keysA) {
+        if (mapB[k] === undefined || Math.abs(mapA[k] - mapB[k]) >= 0.0001) {
+          return false;
         }
-        return true;
-      };
+      }
+      return true;
+    };
 
-      if (existingSafetyStr !== newSafetyStr || !isWasteEqual()) {
+    const matchingItems = tempItems.filter(t => t.productId === selectedProductId);
+
+    if (matchingItems.length > 1) {
+      alert('Bu ürün siparişte birden fazla kalem olarak bulunmaktadır. Miktarı değiştirmek için mevcut kalemleri düzenleyin veya kaldırın.');
+      return;
+    }
+
+    if (matchingItems.length === 1) {
+      const existingItem = matchingItems[0];
+      const existingIndex = tempItems.indexOf(existingItem);
+
+      if (!isSafetyRateEqual(existingItem.safetyRateOverride, customSafetyRate) || !isWasteOverridesEqual(existingItem.wasteRateOverrides, customWasteOverrides)) {
         alert('Aynı ürün farklı güvenlik veya fire ayarlarıyla ikinci kez eklenemez. Mevcut ürün kalemini kaldırıp doğru ayarlarla yeniden ekleyin.');
         return;
       }

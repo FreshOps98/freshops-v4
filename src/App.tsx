@@ -1641,8 +1641,7 @@ export default function App() {
         setOrderItems(freshOrderItems);
       } catch (err: any) {
         console.error("Error adding order via RPC:", err);
-        alert(`Sipariş oluşturulurken hata oluştu: ${err.message || err}`);
-        throw err; // propagate error so that OrdersView doesn't close the modal
+        throw err; // propagate error so that OrdersView displays alert and keeps modal open
       }
     } else {
       const orderId = 'ord_' + Math.random().toString(36).substring(2, 9);
@@ -1683,7 +1682,7 @@ export default function App() {
         setOrderItems(freshOrderItems);
       } catch (err: any) {
         console.error("Error updating order:", err);
-        alert(`Sipariş güncellenirken hata oluştu: ${err.message || err}`);
+        throw err; // propagate error so that OrdersView displays alert and keeps modal open
       }
     } else {
       setOrders(orders.map(o => o.id === id ? { ...o, ...updates, updatedAt: new Date().toISOString() } : o));

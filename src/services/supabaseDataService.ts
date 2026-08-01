@@ -1111,65 +1111,51 @@ export const supabaseDataService = {
 
     if (orderErr) throw orderErr;
 
+    const orderId = newOrder?.orderId || newOrder?.id || newOrder?.order_id;
+    if (orderId) {
+      const { data: fetchedOrder } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .single();
+      if (fetchedOrder) return dbToOrder(fetchedOrder);
+    }
+
     return dbToOrder(newOrder);
   },
 
   async updateOrder(id: string, updates: Partial<Order>, items?: OrderItem[]): Promise<Order> {
-    const { data: existing, error: getErr } = await supabase
+    const { data: result, error: orderErr } = await supabase.rpc("update_order_with_items_atomic", {
+      p_order_id: id,
+      p_customer_id: updates.customerId || null,
+      p_order_date: updates.orderDate || null,
+      p_delivery_date: updates.deliveryDate || null,
+      p_status: updates.status || null,
+      p_approval_status: updates.approvalStatus || null,
+      p_computed_status: updates.computedStatus || updates.status || null,
+      p_note: updates.note !== undefined ? updates.note : null,
+      p_cost_settings_snapshot: updates.costSettingsSnapshot || null,
+      p_items: items ? items.map(item => ({
+        id: item.id || null,
+        productId: item.productId,
+        quantity: Number(item.quantity),
+        unit: item.unit || "adet",
+        unitSalePrice: Number(item.unitSalePrice || (item as any).salePrice || 0),
+        safetyRateOverride: item.safetyRateOverride ?? null,
+        wasteRateOverrides: item.wasteRateOverrides ?? null
+      })) : null
+    });
+
+    if (orderErr) throw orderErr;
+
+    const { data: fetchedOrder, error: fetchErr } = await supabase
       .from('orders')
       .select('*')
       .eq('id', id)
       .single();
-    if (getErr) throw getErr;
 
-    const existingObj = dbToOrder(existing);
-    
-    let totalAmount = existingObj.totalAmount;
-    if (items) {
-      totalAmount = items.reduce((sum, item) => sum + (toNumber(item.quantity, 0) * toNumber(item.unitSalePrice, 0)), 0);
-    }
-
-    const updatedObj = {
-      ...existingObj,
-      ...updates,
-      totalAmount,
-      updatedAt: new Date().toISOString()
-    };
-
-    const mappedOrder = orderToDb(updatedObj);
-    const { data: updatedOrder, error: orderErr } = await supabase
-      .from('orders')
-      .update(mappedOrder)
-      .eq('id', id)
-      .select()
-      .single();
-    if (orderErr) throw orderErr;
-
-    if (items) {
-      const { error: delErr } = await supabase
-        .from('order_items')
-        .delete()
-        .eq('order_id', id);
-      if (delErr) throw delErr;
-
-      const mappedItems = items.map(item => {
-        const fullItem = {
-          ...item,
-          id: item.id || 'item_' + generateId(),
-          orderId: id,
-          createdAt: item.createdAt || new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        return orderItemToDb(fullItem);
-      });
-
-      const { error: insErr } = await supabase
-        .from('order_items')
-        .insert(mappedItems);
-      if (insErr) throw insErr;
-    }
-
-    return dbToOrder(updatedOrder);
+    if (fetchErr || !fetchedOrder) return dbToOrder(result);
+    return dbToOrder(fetchedOrder);
   },
 
   async deleteOrder(id: string): Promise<void> {
