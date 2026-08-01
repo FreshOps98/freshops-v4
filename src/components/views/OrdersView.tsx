@@ -421,14 +421,44 @@ export default function OrdersView({
     const prod = products.find(p => p.id === selectedProductId);
     if (!prod) return;
 
-    // formatted overrides
-    const parsedSafety = customSafetyRate !== '' ? parseFloat(customSafetyRate) : undefined;
-    const parsedWastes: Record<string, number> = {};
-    Object.keys(customWasteOverrides).forEach(k => {
-      if (customWasteOverrides[k] !== '') {
-        parsedWastes[k] = parseFloat(customWasteOverrides[k]);
+    const existingIndex = tempItems.findIndex(t => t.productId === selectedProductId);
+
+    if (existingIndex !== -1) {
+      const existingItem = tempItems[existingIndex];
+
+      // Compare safety rate override
+      const existingSafetyStr = (existingItem.safetyRateOverride || '').trim();
+      const newSafetyStr = (customSafetyRate || '').trim();
+
+      // Compare waste rate overrides
+      const isWasteEqual = () => {
+        const existingWastes = existingItem.wasteRateOverrides || {};
+        const newWastes = customWasteOverrides || {};
+        const keysE = Object.keys(existingWastes).filter(k => existingWastes[k] !== undefined && existingWastes[k] !== '' && existingWastes[k] !== null);
+        const keysN = Object.keys(newWastes).filter(k => newWastes[k] !== undefined && newWastes[k] !== '' && newWastes[k] !== null);
+        if (keysE.length !== keysN.length) return false;
+        for (const k of keysE) {
+          if ((existingWastes[k] || '').trim() !== (newWastes[k] || '').trim()) return false;
+        }
+        return true;
+      };
+
+      if (existingSafetyStr !== newSafetyStr || !isWasteEqual()) {
+        alert('Aynı ürün farklı güvenlik veya fire ayarlarıyla ikinci kez eklenemez. Mevcut ürün kalemini kaldırıp doğru ayarlarla yeniden ekleyin.');
+        return;
       }
-    });
+
+      // Merge into existing item
+      const updatedTempItems = [...tempItems];
+      updatedTempItems[existingIndex] = {
+        ...existingItem,
+        quantity: existingItem.quantity + qty,
+        unitSalePrice: prod.salePrice
+      };
+      setTempItems(updatedTempItems);
+      resetItemLineForm();
+      return;
+    }
 
     const newItem = {
       id: 'temp_' + Math.random().toString(36).substring(2, 9),
@@ -493,8 +523,9 @@ export default function OrdersView({
         await onAddOrder(orderData, formattedItems);
       }
       setIsModalOpen(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error saving order:", err);
+      alert(err?.message || 'Sipariş kaydedilirken bir hata oluştu.');
       // Keep the modal open and don't reset form so the user can fix/retry
     }
   };
